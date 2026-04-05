@@ -40,6 +40,37 @@ const userSchema = new mongoose.Schema({
   verificationTokenExpiration: {
     type: Date,
   },
+  // ── Admin & Moderation ──────────────────────────────────────────────
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
+  isSuspended: {
+    type: Boolean,
+    default: false,
+  },
+  suspendedUntil: {
+    type: Date,
+    default: null,
+  },
+  isBanned: {
+    type: Boolean,
+    default: false,
+  },
+  banReason: {
+    type: String,
+    default: null,
+  },
+  warnings: [
+    {
+      reason: { type: String, required: true },
+      issuedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      createdAt: { type: Date, default: Date.now },
+    },
+  ],
 });
 
 // Hash password before saving

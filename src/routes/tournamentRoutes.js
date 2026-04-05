@@ -20,6 +20,10 @@ router.post("/:id/generate-bracket", authMiddleware, tournamentController.genera
 router.post("/:id/register", authMiddleware, tournamentController.registerTeam);
 router.post("/:id/unregister", authMiddleware, tournamentController.unregisterTeam);
 
+// Protected routes (Payment verification - organizer only)
+router.patch("/:id/participants/:teamId/verify", authMiddleware, tournamentController.verifyRegistration);
+router.get("/:id/participants/:teamId/screenshot", authMiddleware, tournamentController.getPaymentScreenshot);
+
 // Protected routes (Bracket management)
 router.patch("/:id/bracket", authMiddleware, tournamentController.updateBracket);
 

@@ -6,7 +6,7 @@ const jwt = require("jsonwebtoken");
 const generateToken = (userId) => {
   return jwt.sign(
     { id: userId },
-    process.env.JWT_SECRET || "your-secret-key-change-in-production",
+    process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
 };
@@ -192,6 +192,27 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Check if user is banned
+    if (user.isBanned) {
+      return res.status(403).json({
+        success: false,
+        message: `Your account has been banned. Reason: ${user.banReason || "Not specified"}`,
+      });
+    }
+
+    // Check if user is suspended
+    if (user.isSuspended && user.suspendedUntil) {
+      if (new Date(user.suspendedUntil) > new Date()) {
+        return res.status(403).json({
+          success: false,
+          message: `Your account is suspended until ${new Date(user.suspendedUntil).toLocaleDateString()}`,
+        });
+      }
+      // Suspension expired — auto-clear
+      user.isSuspended = false;
+      user.suspendedUntil = null;
+    }
+
     // Update last login
     user.lastLogin = new Date();
     await user.save();
@@ -212,6 +233,7 @@ exports.login = async (req, res) => {
           id: user._id,
           username: user.username,
           email: user.email,
+          isAdmin: user.isAdmin || false,
         },
       },
     });

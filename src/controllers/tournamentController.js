@@ -1,53 +1,105 @@
 const Tournament = require("../models/Tournament");
 const OrganizationAccount = require("../models/OrganizationAccount");
 const { resolveOrgPermission } = require("../utils/orgPermission");
+const Notification = require("../models/Notification");
+const { emitNotification } = require("../socket/socketHandler");
+
+// Helper: create + emit a single notification (fire-and-forget, errors are non-fatal)
+async function sendNotification({ recipientId, recipientModel, type, title, message, link = null, refId = null, refModel = null }) {
+  try {
+    const notification = await Notification.create({
+      recipient: recipientId,
+      recipientModel,
+      type,
+      title,
+      message,
+      link,
+      refId,
+      refModel,
+    });
+    emitNotification(recipientId, notification);
+  } catch (err) {
+    console.error("sendNotification error (non-fatal):", err.message);
+  }
+}
+
+// Notify all registered participants when a tournament is cancelled due to insufficient teams
+async function notifyLowTeamsCancellation(tournament) {
+  const Team = require("../models/Team");
+  const minTeams = tournament.minimumTeams || 2;
+  for (const participant of tournament.participants) {
+    if (!participant.team) continue;
+    const team = await Team.findById(participant.team).select("owner");
+    if (team?.owner) {
+      await sendNotification({
+        recipientId: team.owner,
+        recipientModel: "User",
+        type: "tournament_registration_rejected",
+        title: "Tournament Cancelled",
+        message: `"${tournament.name}" has been cancelled because the minimum team requirement of ${minTeams} was not met by registration close.`,
+        link: `/tournaments`,
+        refId: tournament._id,
+        refModel: "Tournament",
+      });
+    }
+  }
+}
 
 // Helper function to update tournament status based on dates
+// Returns { tournament, statusChanged, cancelledDueToLowTeams }
 const updateTournamentStatus = (tournament) => {
-  if (!tournament || tournament.status === 'completed' || tournament.status === 'cancelled') {
-    return tournament;
+  if (!tournament || tournament.status === 'completed' || tournament.status === 'cancelled' || tournament.status === 'overdue') {
+    return { tournament, statusChanged: false, cancelledDueToLowTeams: false };
   }
 
   const now = new Date();
   const regStart = new Date(tournament.registrationStartDate);
   const regEnd = new Date(tournament.registrationEndDate);
   const tourStart = new Date(tournament.tournamentStartDate);
-  const tourEnd = new Date(tournament.tournamentEndDate);
+  const tourEnd = tournament.tournamentEndDate ? new Date(tournament.tournamentEndDate) : null;
+  const minTeams = tournament.minimumTeams || 2;
 
   let newStatus = tournament.status;
+  let cancelledDueToLowTeams = false;
 
-  // If tournament is published
   if (tournament.isPublished) {
     if (now < regStart) {
-      // Before registration starts
-      newStatus = 'registration_open'; // Will open soon
+      newStatus = 'registration_open';
     } else if (now >= regStart && now <= regEnd) {
-      // During registration period
       newStatus = 'registration_open';
     } else if (now > regEnd && now < tourStart) {
-      // Registration closed, tournament not started
-      newStatus = 'registration_closed';
-    } else if (now >= tourStart && now <= tourEnd) {
-      // Tournament is ongoing
+      // Registration closed — check if minimum teams threshold is met
+      const eligibleCount = tournament.participants.filter(
+        (p) => p.status === 'approved' || p.status === 'confirmed' || p.status === 'registered'
+      ).length;
+
+      if (eligibleCount < minTeams) {
+        // Not enough teams — cancel and flag so caller can notify participants
+        newStatus = 'cancelled';
+        cancelledDueToLowTeams = true;
+      } else {
+        newStatus = 'registration_closed';
+      }
+    } else if (now >= tourStart && (tourEnd === null || now <= tourEnd)) {
       newStatus = 'ongoing';
-    } else if (now > tourEnd) {
-      // Tournament end date passed — only auto-complete if a winner was declared
-      // Otherwise keep as ongoing so the bracket can still be finished
+    } else if (tourEnd && now > tourEnd) {
+      // Tournament end date passed
       if (tournament.winner && tournament.winner.team) {
+        // Winner declared → mark completed
         newStatus = 'completed';
       } else {
-        newStatus = 'ongoing';
+        // Bracket unfinished past end date → overdue so organizer is forced to act
+        newStatus = 'overdue';
       }
     }
   }
 
-  // Update status if it changed
   if (newStatus !== tournament.status) {
     tournament.status = newStatus;
-    return { tournament, statusChanged: true };
+    return { tournament, statusChanged: true, cancelledDueToLowTeams };
   }
 
-  return { tournament, statusChanged: false };
+  return { tournament, statusChanged: false, cancelledDueToLowTeams: false };
 };
 
 // Create tournament
@@ -60,6 +112,7 @@ exports.createTournament = async (req, res) => {
       customGame,
       matchmakingType,
       totalSlots,
+      minimumTeams,
       teamSize,
       prizePool,
       registrationStartDate,
@@ -71,6 +124,7 @@ exports.createTournament = async (req, res) => {
       settings,
       streamUrl,
       discordUrl,
+      entryFee,
     } = req.body;
 
     // Validation
@@ -90,6 +144,14 @@ exports.createTournament = async (req, res) => {
           message: `For ${matchmakingType.replace("_", " ")}, total slots must be a power of 2 (2, 4, 8, 16, 32, 64, 128)`,
         });
       }
+    }
+
+    // Validate minimumTeams
+    if (minimumTeams && minimumTeams > totalSlots) {
+      return res.status(400).json({
+        success: false,
+        message: "Minimum teams cannot exceed total slots",
+      });
     }
 
     // Validate dates
@@ -132,8 +194,10 @@ exports.createTournament = async (req, res) => {
       organizerName: organizer.organizationName,
       matchmakingType,
       totalSlots,
+      minimumTeams: minimumTeams || 2,
       teamSize: teamSize || 5,
       prizePool,
+      entryFee: entryFee || { amount: 0, currency: "NPR" },
       registrationStartDate,
       registrationEndDate,
       tournamentStartDate,
@@ -181,6 +245,7 @@ exports.getAllTournaments = async (req, res) => {
     }
 
     const tournaments = await Tournament.find(filter)
+      .select("-participants.paymentScreenshot")
       .populate("organizer", "organizationName tag logo")
       .sort({ tournamentStartDate: 1 })
       .limit(50);
@@ -188,9 +253,15 @@ exports.getAllTournaments = async (req, res) => {
     // Update status for each tournament based on dates
     const updatedTournaments = [];
     for (const tournament of tournaments) {
-      const { statusChanged } = updateTournamentStatus(tournament);
+      const { statusChanged, cancelledDueToLowTeams } = updateTournamentStatus(tournament);
       if (statusChanged) {
         await tournament.save();
+        // Notify registered participants if cancelled due to insufficient teams
+        if (cancelledDueToLowTeams) {
+          notifyLowTeamsCancellation(tournament).catch((e) =>
+            console.error("low-teams cancellation notification error:", e.message)
+          );
+        }
       }
       updatedTournaments.push(tournament);
     }
@@ -212,6 +283,7 @@ exports.getAllTournaments = async (req, res) => {
 exports.getTournamentById = async (req, res) => {
   try {
     const tournament = await Tournament.findById(req.params.id)
+      .select("-participants.paymentScreenshot")
       .populate("organizer", "organizationName tag logo contactEmail")
       .populate("participants.team", "name tag logo");
 
@@ -223,13 +295,19 @@ exports.getTournamentById = async (req, res) => {
     }
 
     // Update tournament status based on dates
-    const { statusChanged } = updateTournamentStatus(tournament);
+    const { statusChanged, cancelledDueToLowTeams } = updateTournamentStatus(tournament);
 
     // Increment view count
     tournament.viewCount += 1;
 
     // Save if status changed or view count incremented
     await tournament.save();
+
+    if (cancelledDueToLowTeams) {
+      notifyLowTeamsCancellation(tournament).catch((e) =>
+        console.error("low-teams cancellation notification error:", e.message)
+      );
+    }
 
     res.status(200).json({
       success: true,
@@ -318,12 +396,14 @@ exports.updateTournament = async (req, res) => {
       discordUrl,
       banner,
       logo,
+      entryFee,
     } = req.body;
 
     // Update allowed fields
     if (name !== undefined) tournament.name = name;
     if (description !== undefined) tournament.description = description;
     if (prizePool !== undefined) tournament.prizePool = prizePool;
+    if (entryFee !== undefined) tournament.entryFee = entryFee;
     if (rules !== undefined) tournament.rules = rules;
     if (requirements !== undefined) tournament.requirements = requirements;
     if (settings !== undefined) tournament.settings = settings;
@@ -371,10 +451,40 @@ exports.updateRegistrationDates = async (req, res) => {
     }
 
     // Prevent updates once tournament has started or completed
-    if (tournament.status === "ongoing" || tournament.status === "completed") {
+    if (tournament.status === "completed") {
       return res.status(400).json({
         success: false,
-        message: "Cannot update dates for a tournament that is ongoing or completed",
+        message: "Cannot update dates for a completed tournament",
+      });
+    }
+
+    // Ongoing tournaments: only allow extending the end date (to fix overdue situations)
+    const ongoingOrOverdue = tournament.status === "ongoing" || tournament.status === "overdue";
+    if (ongoingOrOverdue) {
+      const { tournamentEndDate } = req.body;
+      if (!tournamentEndDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Only the tournament end date can be extended once a tournament is ongoing or overdue",
+        });
+      }
+      const newEnd = new Date(tournamentEndDate);
+      if (newEnd <= new Date(tournament.tournamentStartDate)) {
+        return res.status(400).json({
+          success: false,
+          message: "Tournament end date must be after the tournament start date",
+        });
+      }
+      tournament.tournamentEndDate = newEnd;
+      // If overdue and new end is in the future, revert status to ongoing
+      if (tournament.status === "overdue" && newEnd > new Date()) {
+        tournament.status = "ongoing";
+      }
+      await tournament.save();
+      return res.status(200).json({
+        success: true,
+        message: "Tournament end date extended successfully",
+        data: { tournament },
       });
     }
 
@@ -432,10 +542,17 @@ exports.updateRegistrationDates = async (req, res) => {
       tournament.tournamentEndDate = newTourEnd;
     }
 
-    // If registration is being reopened/extended, update status if needed
+    // Recalculate status after date change
     const now = new Date();
-    if (now >= newRegStart && now <= newRegEnd && tournament.status === "draft") {
-      tournament.status = "registration_open";
+    if (now >= newRegStart && now <= newRegEnd) {
+      // Registration window is open — reopen regardless of previous status
+      if (tournament.status === "draft" || tournament.status === "registration_closed") {
+        tournament.status = "registration_open";
+      }
+    } else if (now > newRegEnd && now < newTourStart) {
+      if (tournament.status === "registration_open") {
+        tournament.status = "registration_closed";
+      }
     }
 
     await tournament.save();
@@ -564,10 +681,27 @@ exports.generateBracket = async (req, res) => {
       });
     }
 
+    // For paid tournaments, only include approved participants in bracket
+    const isPaid = tournament.entryFee && tournament.entryFee.amount > 0;
+    if (isPaid) {
+      const pendingCount = tournament.participants.filter(
+        (p) => p.status === "pending_approval"
+      ).length;
+      if (pendingCount > 0) {
+        console.log(`Warning: ${pendingCount} participants still pending approval`);
+      }
+      // Filter to only approved participants for bracket generation
+      tournament.participants = tournament.participants.filter(
+        (p) => p.status === "approved" || p.status === "confirmed"
+      );
+    }
+
     if (tournament.participants.length < 2) {
       return res.status(400).json({
         success: false,
-        message: "Need at least 2 participants to generate bracket",
+        message: isPaid
+          ? "Need at least 2 approved participants to generate bracket. Please verify pending payments first."
+          : "Need at least 2 participants to generate bracket",
       });
     }
 
@@ -686,6 +820,34 @@ exports.generateBracket = async (req, res) => {
     tournament.markModified('matches');
     await tournament.save();
 
+    // Notify all approved participants that the bracket is ready (fire-and-forget)
+    if (!preserveResults) {
+      try {
+        const Team = require("../models/Team");
+        const approvedParticipants = tournament.participants.filter(
+          (p) => p.status === "approved" || p.status === "confirmed" || p.status === "winner" || p.status === "eliminated"
+        );
+        for (const participant of approvedParticipants) {
+          if (!participant.team) continue;
+          const team = await Team.findById(participant.team).select("owner");
+          if (team?.owner) {
+            await sendNotification({
+              recipientId: team.owner,
+              recipientModel: "User",
+              type: "tournament_bracket_generated",
+              title: "Bracket is Live!",
+              message: `The bracket for "${tournament.name}" has been generated. Check your match schedule now!`,
+              link: `/tournament/${tournament._id}/bracket`,
+              refId: tournament._id,
+              refModel: "Tournament",
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("generateBracket notification error (non-fatal):", notifErr.message);
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: preserveResults ? "Bracket regenerated with preserved results" : "Bracket generated successfully",
@@ -708,7 +870,7 @@ exports.registerTeam = async (req, res) => {
     console.log("Team ID:", req.body.teamId);
     console.log("User ID:", req.userId);
 
-    const { teamId } = req.body;
+    const { teamId, paymentScreenshot } = req.body;
 
     if (!teamId) {
       return res.status(400).json({
@@ -760,8 +922,9 @@ exports.registerTeam = async (req, res) => {
       });
     }
 
-    // Check if tournament is full
-    if (tournament.participants.length >= tournament.totalSlots) {
+    // Check if tournament is full (exclude rejected participants)
+    const activeParticipants = tournament.participants.filter(p => p.status !== "rejected");
+    if (activeParticipants.length >= tournament.totalSlots) {
       console.log("Tournament is full");
       return res.status(400).json({
         success: false,
@@ -841,13 +1004,34 @@ exports.registerTeam = async (req, res) => {
       });
     }
 
+    // Determine if this is a paid tournament
+    const isPaid = tournament.entryFee && tournament.entryFee.amount > 0;
+
+    // For paid tournaments, require payment screenshot
+    if (isPaid && !paymentScreenshot) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment screenshot is required for paid tournaments",
+      });
+    }
+
+    // Validate screenshot size (~500KB max)
+    if (paymentScreenshot && paymentScreenshot.length > 700000) {
+      return res.status(400).json({
+        success: false,
+        message: "Screenshot is too large. Please upload an image under 500KB.",
+      });
+    }
+
     // Add team to participants
     console.log("Adding team to participants");
     tournament.participants.push({
       team: teamId,
       teamName: team.name,
       registrationDate: new Date(),
-      status: "registered",
+      status: isPaid ? "pending_approval" : "registered",
+      paymentScreenshot: isPaid ? paymentScreenshot : undefined,
+      paymentSubmittedAt: isPaid ? new Date() : undefined,
     });
 
     await tournament.save();
@@ -855,8 +1039,13 @@ exports.registerTeam = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Team registered successfully",
-      data: { tournament },
+      message: isPaid
+        ? "Team registered! Payment is pending verification by the organizer."
+        : "Team registered successfully",
+      data: {
+        tournament,
+        isPaidTournament: isPaid,
+      },
     });
   } catch (error) {
     console.error("=== Register team error ===");
@@ -950,6 +1139,164 @@ exports.unregisterTeam = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to unregister team",
+    });
+  }
+};
+
+// Verify registration (approve/reject) for paid tournaments
+exports.verifyRegistration = async (req, res) => {
+  try {
+    const { action, reason } = req.body;
+    const { id: tournamentId, teamId } = req.params;
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Action must be 'approve' or 'reject'",
+      });
+    }
+
+    const tournament = await Tournament.findById(tournamentId);
+
+    if (!tournament) {
+      return res.status(404).json({
+        success: false,
+        message: "Tournament not found",
+      });
+    }
+
+    // Check organizer permission
+    const { authorized } = await resolveOrgPermission(
+      req.userId, req.accountType, tournament.organizer
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to manage this tournament",
+      });
+    }
+
+    // Find participant
+    const participant = tournament.participants.find(
+      (p) => p.team.toString() === teamId
+    );
+
+    if (!participant) {
+      return res.status(404).json({
+        success: false,
+        message: "Team not found in tournament participants",
+      });
+    }
+
+    if (action === "approve") {
+      if (participant.status !== "pending_approval") {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot approve a participant with status '${participant.status}'`,
+        });
+      }
+      participant.status = "approved";
+      participant.approvedAt = new Date();
+      participant.approvedBy = req.userId;
+    } else {
+      if (participant.status !== "pending_approval") {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot reject a participant with status '${participant.status}'`,
+        });
+      }
+      participant.status = "rejected";
+      participant.rejectedAt = new Date();
+      participant.rejectionReason = reason || "Payment not verified";
+    }
+
+    tournament.markModified("participants");
+    await tournament.save();
+
+    // Notify the team owner about the registration decision
+    try {
+      const Team = require("../models/Team");
+      const team = await Team.findById(teamId).select("owner");
+      if (team?.owner) {
+        const isApproved = action === "approve";
+        await sendNotification({
+          recipientId: team.owner,
+          recipientModel: "User",
+          type: isApproved ? "tournament_registration_approved" : "tournament_registration_rejected",
+          title: isApproved ? "Registration Approved" : "Registration Rejected",
+          message: isApproved
+            ? `Your team's registration for "${tournament.name}" has been approved. Get ready to compete!`
+            : `Your team's registration for "${tournament.name}" was rejected. Reason: ${reason || "Payment not verified"}`,
+          link: `/tournament/${tournament._id}`,
+          refId: tournament._id,
+          refModel: "Tournament",
+        });
+      }
+    } catch (notifErr) {
+      console.error("verifyRegistration notification error (non-fatal):", notifErr.message);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: action === "approve"
+        ? "Registration approved successfully"
+        : "Registration rejected",
+      data: { participant },
+    });
+  } catch (error) {
+    console.error("Verify registration error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to verify registration",
+    });
+  }
+};
+
+// Get payment screenshot for a participant (organizer only)
+exports.getPaymentScreenshot = async (req, res) => {
+  try {
+    const { id: tournamentId, teamId } = req.params;
+
+    const tournament = await Tournament.findById(tournamentId);
+
+    if (!tournament) {
+      return res.status(404).json({
+        success: false,
+        message: "Tournament not found",
+      });
+    }
+
+    // Check organizer permission
+    const { authorized } = await resolveOrgPermission(
+      req.userId, req.accountType, tournament.organizer
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to view this",
+      });
+    }
+
+    const participant = tournament.participants.find(
+      (p) => p.team.toString() === teamId
+    );
+
+    if (!participant || !participant.paymentScreenshot) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment screenshot not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: { screenshot: participant.paymentScreenshot },
+    });
+  } catch (error) {
+    console.error("Get payment screenshot error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get payment screenshot",
     });
   }
 };
@@ -1290,6 +1637,31 @@ exports.reportMatchResult = async (req, res) => {
       }
     }
 
+    // Notify all participants when the tournament is completed
+    if (tournamentCompleted) {
+      try {
+        const Team = require("../models/Team");
+        for (const participant of tournament.participants) {
+          if (!participant.team) continue;
+          const team = await Team.findById(participant.team).select("owner");
+          if (team?.owner) {
+            await sendNotification({
+              recipientId: team.owner,
+              recipientModel: "User",
+              type: "tournament_completed",
+              title: "Tournament Completed",
+              message: `"${tournament.name}" has concluded. Champion: ${tournament.winner.teamName}. Check the final standings!`,
+              link: `/tournament/${tournament._id}/bracket`,
+              refId: tournament._id,
+              refModel: "Tournament",
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("reportMatchResult tournament_completed notification error (non-fatal):", notifErr.message);
+      }
+    }
+
     // Log the updated match state
     const savedMatch = tournament.matches.find(m => m.matchNumber === parseInt(matchNumber));
     console.log("Saved match state:", {
@@ -1421,6 +1793,37 @@ exports.updateMatchSchedule = async (req, res) => {
 
     tournament.markModified('matches');
     await tournament.save();
+
+    // Notify both participants when a scheduled time is set
+    if (scheduledTime) {
+      try {
+        const Team = require("../models/Team");
+        const participantTeams = [match.participant1, match.participant2].filter(
+          (p) => p && p.team
+        );
+        const formattedTime = new Date(scheduledTime).toLocaleString("en-US", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        });
+        for (const p of participantTeams) {
+          const team = await Team.findById(p.team).select("owner");
+          if (team?.owner) {
+            await sendNotification({
+              recipientId: team.owner,
+              recipientModel: "User",
+              type: "tournament_match_scheduled",
+              title: "Match Scheduled",
+              message: `Your match in "${tournament.name}" has been scheduled for ${formattedTime}.`,
+              link: `/tournament/${tournament._id}/bracket`,
+              refId: tournament._id,
+              refModel: "Tournament",
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("updateMatchSchedule notification error (non-fatal):", notifErr.message);
+      }
+    }
 
     res.status(200).json({
       success: true,

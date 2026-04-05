@@ -1,5 +1,7 @@
 const Stream = require("../models/Stream");
 const User = require("../models/User");
+const OrganizationAccount = require("../models/OrganizationAccount");
+const Tournament = require("../models/Tournament");
 
 // Create a new stream (Organizers only)
 exports.createStream = async (req, res) => {
@@ -23,12 +25,34 @@ exports.createStream = async (req, res) => {
       });
     }
 
-    // Get organizer details
-    const organizer = await User.findById(req.userId);
+    // Get organizer details — support both User and OrganizationAccount
+    let organizer = null;
+    let organizerModel = "User";
+    let organizerName = "";
+
+    if (req.accountType === "organization") {
+      organizer = await OrganizationAccount.findById(req.userId);
+      organizerModel = "OrganizationAccount";
+      organizerName = organizer?.organizationName || "";
+    } else {
+      organizer = await User.findById(req.userId);
+      organizerModel = "User";
+      organizerName = organizer?.username || "";
+    }
+
     if (!organizer) {
       return res.status(404).json({
         success: false,
         message: "Organizer not found",
+      });
+    }
+
+    // Validate tournament exists
+    const tournamentDoc = await Tournament.findById(tournament);
+    if (!tournamentDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Tournament not found",
       });
     }
 
@@ -38,9 +62,11 @@ exports.createStream = async (req, res) => {
       description,
       youtubeUrl,
       game,
-      tournament,
+      tournament: tournamentDoc._id,
+      tournamentName: tournamentDoc.name,
       organizer: req.userId,
-      organizerName: organizer.username,
+      organizerModel,
+      organizerName,
       startTime,
       endTime,
       isNepal: isNepal !== undefined ? isNepal : true,
@@ -89,13 +115,14 @@ exports.getAllStreams = async (req, res) => {
     if (search) {
       filter.$or = [
         { title: { $regex: search, $options: "i" } },
-        { tournament: { $regex: search, $options: "i" } },
+        { tournamentName: { $regex: search, $options: "i" } },
         { organizerName: { $regex: search, $options: "i" } },
       ];
     }
 
     const streams = await Stream.find(filter)
-      .populate("organizer", "username email")
+      .populate("tournament", "name game status")
+      .populate("organizer", "username email organizationName")
       .sort({ startTime: -1 })
       .limit(50);
 
@@ -118,10 +145,9 @@ exports.getAllStreams = async (req, res) => {
 // Get stream by ID
 exports.getStreamById = async (req, res) => {
   try {
-    const stream = await Stream.findById(req.params.id).populate(
-      "organizer",
-      "username email"
-    );
+    const stream = await Stream.findById(req.params.id)
+      .populate("tournament", "name game status")
+      .populate("organizer", "username email organizationName");
 
     if (!stream) {
       return res.status(404).json({
@@ -201,12 +227,21 @@ exports.updateStream = async (req, res) => {
       isNepal,
     } = req.body;
 
+    // If tournament changed, validate and update name
+    if (tournament && tournament !== stream.tournament?.toString()) {
+      const tournamentDoc = await Tournament.findById(tournament);
+      if (!tournamentDoc) {
+        return res.status(404).json({ success: false, message: "Tournament not found" });
+      }
+      stream.tournament = tournamentDoc._id;
+      stream.tournamentName = tournamentDoc.name;
+    }
+
     // Update fields
     if (title) stream.title = title;
     if (description) stream.description = description;
     if (youtubeUrl) stream.youtubeUrl = youtubeUrl;
     if (game) stream.game = game;
-    if (tournament) stream.tournament = tournament;
     if (startTime) stream.startTime = startTime;
     if (endTime) stream.endTime = endTime;
     if (status) stream.status = status;

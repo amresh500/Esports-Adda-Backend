@@ -13,13 +13,22 @@ const participantSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["registered", "confirmed", "eliminated", "winner"],
+    enum: ["registered", "pending_approval", "approved", "rejected", "confirmed", "eliminated", "winner"],
     default: "registered",
   },
   placement: Number,
   joinedAt: {
     type: Date,
     default: Date.now,
+  },
+  paymentScreenshot: String,
+  paymentSubmittedAt: Date,
+  approvedAt: Date,
+  rejectedAt: Date,
+  rejectionReason: String,
+  approvedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "OrganizationAccount",
   },
 });
 
@@ -107,6 +116,11 @@ const tournamentSchema = new mongoose.Schema(
       min: 2,
       max: 128,
     },
+    minimumTeams: {
+      type: Number,
+      default: 2,
+      min: 2,
+    },
     teamSize: {
       type: Number,
       default: 5, // Default for 5v5 games like Valorant, CS2
@@ -126,6 +140,11 @@ const tournamentSchema = new mongoose.Schema(
           amount: Number,
         },
       ],
+    },
+    entryFee: {
+      amount: { type: Number, default: 0 },
+      currency: { type: String, default: "NPR" },
+      paymentInstructions: { type: String, maxlength: 1000 },
     },
     registrationStartDate: {
       type: Date,
@@ -149,6 +168,7 @@ const tournamentSchema = new mongoose.Schema(
         "ongoing",
         "completed",
         "cancelled",
+        "overdue",
       ],
       default: "draft",
     },

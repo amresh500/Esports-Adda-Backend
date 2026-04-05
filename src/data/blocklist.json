@@ -1,0 +1,37 @@
+{
+  "severe": [
+    "nigger", "nigga", "faggot", "fag", "retard", "retarded",
+    "chink", "spic", "kike", "gook", "wetback", "beaner",
+    "tranny", "coon", "raghead", "towelhead", "sandnigger",
+    "dyke", "cracker"
+  ],
+  "gamingWhitelist": [
+    "kill", "killed", "killing", "killer",
+    "execute", "executed", "execution",
+    "headshot", "headshotted",
+    "noob", "newb", "n00b",
+    "gg", "ez", "ggez", "ggwp",
+    "trash", "trashed",
+    "bot", "bots",
+    "camp", "camper", "camping",
+    "rush", "rushing",
+    "feed", "feeding", "feeder",
+    "int", "inting",
+    "throw", "throwing", "thrower",
+    "clutch", "clutched",
+    "owned", "pwned", "pwn",
+    "rekt", "wrecked",
+    "destroyed", "destroy",
+    "nuke", "nuked",
+    "bomb", "bombed", "bombing",
+    "snipe", "sniped", "sniper",
+    "assault",
+    "die", "died", "dead", "death",
+    "slay", "slayed", "slayer",
+    "smash", "smashed",
+    "toxic",
+    "rage", "raging",
+    "sweat", "sweaty", "tryhard",
+    "ape", "griefing", "griefer"
+  ]
+}

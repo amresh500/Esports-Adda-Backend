@@ -53,14 +53,25 @@ const streamSchema = new mongoose.Schema(
       ],
     },
     tournament: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Tournament",
+      required: true,
+    },
+    tournamentName: {
       type: String,
       required: true,
       trim: true,
     },
     organizer: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
       required: true,
+      refPath: "organizerModel",
+    },
+    organizerModel: {
+      type: String,
+      required: true,
+      enum: ["User", "OrganizationAccount"],
+      default: "OrganizationAccount",
     },
     organizerName: {
       type: String,

@@ -181,10 +181,13 @@ exports.updateTeam = async (req, res) => {
       });
     }
 
-    if (team.owner.toString() !== req.userId) {
+    const isOwner = team.owner.toString() === req.userId;
+    const isOrgOwner = team.organization && team.organization.toString() === req.userId;
+
+    if (!isOwner && !isOrgOwner) {
       return res.status(403).json({
         success: false,
-        message: "You can only update your own teams",
+        message: "You don't have permission to update this team",
       });
     }
 
@@ -236,10 +239,13 @@ exports.addGameRoster = async (req, res) => {
       });
     }
 
-    if (team.owner.toString() !== req.userId) {
+    const isOwner = team.owner.toString() === req.userId;
+    const isOrgOwner = team.organization && team.organization.toString() === req.userId;
+
+    if (!isOwner && !isOrgOwner) {
       return res.status(403).json({
         success: false,
-        message: "You can only modify your own teams",
+        message: "You don't have permission to modify this team",
       });
     }
 
@@ -291,10 +297,13 @@ exports.addPlayerToRoster = async (req, res) => {
       });
     }
 
-    if (team.owner.toString() !== req.userId) {
+    const isOwner = team.owner.toString() === req.userId;
+    const isOrgOwner = team.organization && team.organization.toString() === req.userId;
+
+    if (!isOwner && !isOrgOwner) {
       return res.status(403).json({
         success: false,
-        message: "You can only modify your own teams",
+        message: "You don't have permission to modify this team",
       });
     }
 
@@ -384,10 +393,13 @@ exports.removePlayerFromRoster = async (req, res) => {
       });
     }
 
-    if (team.owner.toString() !== req.userId) {
+    const isOwner = team.owner.toString() === req.userId;
+    const isOrgOwner = team.organization && team.organization.toString() === req.userId;
+
+    if (!isOwner && !isOrgOwner) {
       return res.status(403).json({
         success: false,
-        message: "You can only modify your own teams",
+        message: "You don't have permission to modify this team",
       });
     }
 
