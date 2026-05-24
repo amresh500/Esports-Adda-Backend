@@ -27,7 +27,7 @@ const PORT = process.env.PORT || 5000;
 
 const ALLOWED_ORIGINS = (
   process.env.ALLOWED_ORIGINS ||
-  "http://localhost:5050,http://localhost:3000,http://localhost:3001,https://esports-adda-frontend-c46ea26ff-amresh-kumar-yadav-s-projects.vercel.app/"
+  "http://localhost:5050,http://localhost:3000,http://localhost:3001,https://esports-adda-frontend-c46ea26ff-amresh-kumar-yadav-s-projects.vercel.app"
 )
   .split(",")
   .map((s) => s.trim())
