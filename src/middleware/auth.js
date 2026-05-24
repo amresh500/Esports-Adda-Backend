@@ -2,28 +2,26 @@ const jwt = require("jsonwebtoken");
 
 const authMiddleware = (req, res, next) => {
   try {
-    // Get token from header
-    const authHeader = req.headers.authorization;
+    // Prefer httpOnly cookie; fall back to Bearer header (used by Socket.io)
+    let token = req.cookies?.token;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) {
+        token = authHeader.split(" ")[1];
+      }
+    }
+
+    if (!token) {
       return res.status(401).json({
         success: false,
         message: "Access denied. No token provided.",
       });
     }
 
-    const token = authHeader.split(" ")[1];
-
-    // Verify token
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-      
-    );
-
-    // Add user id and account type to request
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = decoded.id;
-    req.accountType = decoded.accountType || "user"; // Default to "user" for backward compatibility
+    req.accountType = decoded.accountType || "user";
     next();
   } catch (error) {
     if (error.name === "TokenExpiredError") {
@@ -32,7 +30,6 @@ const authMiddleware = (req, res, next) => {
         message: "Token expired. Please login again.",
       });
     }
-
     res.status(401).json({
       success: false,
       message: "Invalid token",

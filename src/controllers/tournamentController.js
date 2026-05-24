@@ -1,8 +1,154 @@
 const Tournament = require("../models/Tournament");
 const OrganizationAccount = require("../models/OrganizationAccount");
+const MatchStats = require("../models/MatchStats");
+const Team = require("../models/Team");
+const PlayerProfile = require("../models/PlayerProfile");
 const { resolveOrgPermission } = require("../utils/orgPermission");
 const Notification = require("../models/Notification");
 const { emitNotification } = require("../socket/socketHandler");
+
+/**
+ * Auto-award achievements to the winning team, runner-up, their players,
+ * and the organizer when a tournament completes.
+ * Idempotent: skips entries that already reference this tournament.
+ */
+async function awardTournamentAchievements(tournament) {
+  try {
+    const tId = tournament._id;
+    const game =
+      tournament.game === "Other" ? tournament.customGame || "Other" : tournament.game;
+    const endDate = tournament.tournamentEndDate || new Date();
+
+    const winnerTitle    = `Won ${tournament.name}`;
+    const runnerUpTitle  = `Runner-Up — ${tournament.name}`;
+    const playerWinDesc  = `Champion at ${tournament.name}${game ? ` (${game})` : ""}`;
+    const playerRunDesc  = `Finalist at ${tournament.name}${game ? ` (${game})` : ""}`;
+
+    // 1) Winning team + players
+    if (tournament.winner?.team) {
+      const winnerTeam = await Team.findById(tournament.winner.team);
+      if (winnerTeam) {
+        const already = winnerTeam.achievements?.some(
+          (a) => String(a.tournament) === String(tId)
+        );
+        if (!already) {
+          winnerTeam.achievements.push({
+            title: winnerTitle,
+            description: `1st place at ${tournament.name}.`,
+            date: endDate,
+            game,
+            tournament: tId,
+            placement: 1,
+            auto: true,
+          });
+          await winnerTeam.save();
+        }
+
+        // Active players on the roster for this game (or any roster if not matched)
+        const rosterEntry =
+          winnerTeam.games?.find((g) => g.game === game) || winnerTeam.games?.[0];
+        const playerIds =
+          rosterEntry?.roster
+            ?.filter((r) => r.isActive !== false && r.player)
+            ?.map((r) => r.player) || [];
+
+        for (const pid of playerIds) {
+          const profile = await PlayerProfile.findOne({ user: pid });
+          if (!profile) continue;
+          const dupe = profile.achievements?.some(
+            (a) => String(a.tournament) === String(tId)
+          );
+          if (dupe) continue;
+          profile.achievements.push({
+            title: winnerTitle,
+            description: playerWinDesc,
+            date: endDate,
+            game,
+            tournament: tId,
+            team: winnerTeam._id,
+            placement: 1,
+            auto: true,
+          });
+          await profile.save();
+        }
+      }
+    }
+
+    // 2) Runner-up team + players
+    if (tournament.runnerUp?.team) {
+      const runnerTeam = await Team.findById(tournament.runnerUp.team);
+      if (runnerTeam) {
+        const already = runnerTeam.achievements?.some(
+          (a) => String(a.tournament) === String(tId)
+        );
+        if (!already) {
+          runnerTeam.achievements.push({
+            title: runnerUpTitle,
+            description: `2nd place at ${tournament.name}.`,
+            date: endDate,
+            game,
+            tournament: tId,
+            placement: 2,
+            auto: true,
+          });
+          await runnerTeam.save();
+        }
+
+        const rosterEntry =
+          runnerTeam.games?.find((g) => g.game === game) || runnerTeam.games?.[0];
+        const playerIds =
+          rosterEntry?.roster
+            ?.filter((r) => r.isActive !== false && r.player)
+            ?.map((r) => r.player) || [];
+
+        for (const pid of playerIds) {
+          const profile = await PlayerProfile.findOne({ user: pid });
+          if (!profile) continue;
+          const dupe = profile.achievements?.some(
+            (a) => String(a.tournament) === String(tId)
+          );
+          if (dupe) continue;
+          profile.achievements.push({
+            title: runnerUpTitle,
+            description: playerRunDesc,
+            date: endDate,
+            game,
+            tournament: tId,
+            team: runnerTeam._id,
+            placement: 2,
+            auto: true,
+          });
+          await profile.save();
+        }
+      }
+    }
+
+    // 3) Organizer
+    if (tournament.organizer) {
+      const org = await OrganizationAccount.findById(tournament.organizer);
+      if (org) {
+        const already = org.achievements?.some(
+          (a) => String(a.tournament) === String(tId)
+        );
+        if (!already) {
+          org.achievements.push({
+            title: `Hosted ${tournament.name}`,
+            description: `Successfully organized ${tournament.name}${game ? ` (${game})` : ""}.`,
+            date: endDate,
+            game,
+            tournament: tId,
+            auto: true,
+          });
+          await org.save();
+        }
+      }
+    }
+
+    console.log("Auto-achievements awarded for tournament:", tournament.name);
+  } catch (err) {
+    console.error("awardTournamentAchievements error (non-fatal):", err.message);
+  }
+}
 
 // Helper: create + emit a single notification (fire-and-forget, errors are non-fatal)
 async function sendNotification({ recipientId, recipientModel, type, title, message, link = null, refId = null, refModel = null }) {
@@ -1635,6 +1781,9 @@ exports.reportMatchResult = async (req, res) => {
       } catch (statsError) {
         console.error("Error updating team stats (non-fatal):", statsError);
       }
+
+      // Auto-award achievements to winners, runner-up, their rosters, and the organizer
+      await awardTournamentAchievements(tournament);
     }
 
     // Notify all participants when the tournament is completed
@@ -1909,6 +2058,197 @@ exports.resetMatch = async (req, res) => {
       success: false,
       message: "Failed to reset match",
     });
+  }
+};
+
+/**
+ * Submit per-player stats for a single match.
+ * Organizer-only. Idempotent — upserts each (tournament, matchNumber, player) row.
+ *
+ * Body: {
+ *   stats: [
+ *     { playerId, playerUsername?, teamId?, teamName?, kills, deaths, assists,
+ *       damageDealt, rating (0-10), isMVP, won }
+ *     ...
+ *   ]
+ * }
+ */
+exports.reportMatchStats = async (req, res) => {
+  try {
+    const { tournamentId, matchNumber } = req.params;
+    const { stats } = req.body;
+
+    if (!Array.isArray(stats) || stats.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "stats array is required",
+      });
+    }
+
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: "Tournament not found" });
+    }
+
+    const { authorized } = await resolveOrgPermission(
+      req.userId, req.accountType, tournament.organizer
+    );
+    if (!authorized) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to submit stats for this tournament",
+      });
+    }
+
+    const match = tournament.matches.find(
+      (m) => m.matchNumber === parseInt(matchNumber)
+    );
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found" });
+    }
+
+    const game =
+      tournament.game === "Other" ? tournament.customGame || "Other" : tournament.game;
+
+    // Upsert each player's row
+    const ops = stats.map((s) => ({
+      updateOne: {
+        filter: {
+          tournament: tournament._id,
+          matchNumber: parseInt(matchNumber),
+          player: s.playerId,
+        },
+        update: {
+          $set: {
+            tournament: tournament._id,
+            matchNumber: parseInt(matchNumber),
+            game,
+            player: s.playerId,
+            playerUsername: s.playerUsername || "",
+            team: s.teamId || null,
+            teamName: s.teamName || "",
+            kills:       Math.max(0, Number(s.kills)       || 0),
+            deaths:      Math.max(0, Number(s.deaths)      || 0),
+            assists:     Math.max(0, Number(s.assists)     || 0),
+            damageDealt: Math.max(0, Number(s.damageDealt) || 0),
+            rating:      Math.min(10, Math.max(0, Number(s.rating) || 0)),
+            isMVP:       !!s.isMVP,
+            won:         !!s.won,
+            submittedBy: req.accountType === "organization" ? req.userId : undefined,
+          },
+        },
+        upsert: true,
+      },
+    }));
+
+    await MatchStats.bulkWrite(ops);
+
+    res.status(200).json({
+      success: true,
+      message: `Submitted stats for ${stats.length} player(s)`,
+      data: { count: stats.length },
+    });
+  } catch (error) {
+    console.error("reportMatchStats error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to submit match stats",
+    });
+  }
+};
+
+/**
+ * Get participants (with player IDs) for a single match — used by the stats entry form.
+ */
+exports.getMatchPlayers = async (req, res) => {
+  try {
+    const { tournamentId, matchNumber } = req.params;
+
+    const tournament = await Tournament.findById(tournamentId);
+    if (!tournament) {
+      return res.status(404).json({ success: false, message: "Tournament not found" });
+    }
+
+    const { authorized } = await resolveOrgPermission(
+      req.userId, req.accountType, tournament.organizer
+    );
+    if (!authorized) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    const match = tournament.matches.find(
+      (m) => m.matchNumber === parseInt(matchNumber)
+    );
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found" });
+    }
+
+    const teamIds = [
+      match.participant1?.team,
+      match.participant2?.team,
+    ].filter(Boolean);
+
+    const teams = await Team.find({ _id: { $in: teamIds } })
+      .populate("games.roster.player", "username")
+      .lean();
+
+    // Fetch existing stats for this match so the form pre-fills
+    const existing = await MatchStats.find({
+      tournament: tournamentId,
+      matchNumber: parseInt(matchNumber),
+    }).lean();
+    const existingByPlayer = {};
+    existing.forEach((r) => { existingByPlayer[String(r.player)] = r; });
+
+    const game =
+      tournament.game === "Other" ? tournament.customGame || "Other" : tournament.game;
+
+    const buildRoster = (team, side) => {
+      if (!team) return [];
+      const gameEntry = team.games?.find((g) => g.game === game) || team.games?.[0];
+      const roster = gameEntry?.roster || [];
+      return roster
+        .filter((r) => r.player)
+        .map((r) => ({
+          playerId: r.player._id,
+          playerUsername: r.player.username,
+          teamId: team._id,
+          teamName: team.name,
+          side,
+          existing: existingByPlayer[String(r.player._id)] || null,
+        }));
+    };
+
+    const team1 = teams.find((t) => String(t._id) === String(match.participant1?.team));
+    const team2 = teams.find((t) => String(t._id) === String(match.participant2?.team));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        game,
+        match: {
+          matchNumber: match.matchNumber,
+          status: match.status,
+          participant1: {
+            teamId: team1?._id,
+            teamName: match.participant1?.teamName,
+            won: match.winner?.team && String(match.winner.team) === String(team1?._id),
+          },
+          participant2: {
+            teamId: team2?._id,
+            teamName: match.participant2?.teamName,
+            won: match.winner?.team && String(match.winner.team) === String(team2?._id),
+          },
+          roster: [
+            ...buildRoster(team1, "p1"),
+            ...buildRoster(team2, "p2"),
+          ],
+        },
+      },
+    });
+  } catch (error) {
+    console.error("getMatchPlayers error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch match players" });
   }
 };
 

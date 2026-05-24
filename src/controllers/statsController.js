@@ -2,6 +2,7 @@ const Team = require("../models/Team");
 const OrganizationAccount = require("../models/OrganizationAccount");
 const Tournament = require("../models/Tournament");
 const PlayerProfile = require("../models/PlayerProfile");
+const MatchStats = require("../models/MatchStats");
 
 // Get per-game counts (teams + players) for the games sidebar
 exports.getGameCounts = async (req, res) => {
@@ -136,5 +137,77 @@ exports.getOverview = async (req, res) => {
       success: false,
       message: "Failed to fetch stats",
     });
+  }
+};
+
+/**
+ * GET /api/stats/player/:playerId
+ * Returns per-game aggregated stats for one player across all games they've played.
+ */
+exports.getPlayerStats = async (req, res) => {
+  try {
+    const { playerId } = req.params;
+
+    // Get distinct games the player has match-stats for
+    const games = await MatchStats.distinct("game", { player: playerId });
+
+    if (games.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: { games: [], perGame: {}, recent: [] },
+      });
+    }
+
+    const perGame = {};
+    await Promise.all(
+      games.map(async (g) => {
+        perGame[g] = await MatchStats.getPlayerGameStats(playerId, g);
+      })
+    );
+
+    // Recent 10 matches overall, all games
+    const recent = await MatchStats.find({ player: playerId })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate("tournament", "name")
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      data: { games, perGame, recent },
+    });
+  } catch (error) {
+    console.error("getPlayerStats error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch player stats" });
+  }
+};
+
+/**
+ * GET /api/stats/player/:playerId/game/:game
+ * Detailed stats for one player in one game + recent match trend + average comparison.
+ */
+exports.getPlayerGameStats = async (req, res) => {
+  try {
+    const { playerId, game } = req.params;
+    const decodedGame = decodeURIComponent(game);
+
+    const [aggregate, recent, averages] = await Promise.all([
+      MatchStats.getPlayerGameStats(playerId, decodedGame),
+      MatchStats.getRecentMatches(playerId, decodedGame, 10),
+      MatchStats.getGameAverages(decodedGame),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        game: decodedGame,
+        aggregate,
+        recent,
+        averages,
+      },
+    });
+  } catch (error) {
+    console.error("getPlayerGameStats error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch game stats" });
   }
 };

@@ -216,11 +216,19 @@ exports.login = async (req, res) => {
     await organization.save();
 
     // Generate token (longer expiry if remember me is checked)
+    const maxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
     const token = jwt.sign(
       { id: organization._id, accountType: "organization" },
       process.env.JWT_SECRET || "your-secret-key-change-in-production",
       { expiresIn: rememberMe ? "30d" : "7d" }
     );
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge,
+    });
 
     res.status(200).json({
       success: true,
@@ -270,6 +278,15 @@ exports.getCurrentOrganization = async (req, res) => {
       message: "Server error",
     });
   }
+};
+
+exports.logout = (req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  });
+  res.status(200).json({ success: true, message: "Logged out successfully" });
 };
 
 // Verify Organization Email
@@ -348,7 +365,7 @@ exports.updateProfile = async (req, res) => {
       data: {
         organization: await OrganizationAccount.findById(req.userId)
           .select("-password")
-          .populate("teams", "name tag"),
+          .populate("teams", "name tag games"),
       },
     });
   } catch (error) {

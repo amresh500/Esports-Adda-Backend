@@ -166,6 +166,8 @@ const organizationAccountSchema = new mongoose.Schema({
       description: { type: String },
       date: { type: Date },
       game: { type: String },
+      tournament: { type: mongoose.Schema.Types.ObjectId, ref: "Tournament" },
+      auto: { type: Boolean, default: false },
     },
   ],
 

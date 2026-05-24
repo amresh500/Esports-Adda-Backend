@@ -117,6 +117,11 @@ const playerProfileSchema = new mongoose.Schema(
         title: { type: String, required: true },
         description: { type: String },
         date: { type: Date },
+        game: { type: String },
+        tournament: { type: mongoose.Schema.Types.ObjectId, ref: "Tournament" },
+        team: { type: mongoose.Schema.Types.ObjectId, ref: "Team" },
+        placement: { type: Number },
+        auto: { type: Boolean, default: false },
       },
     ],
     stats: {

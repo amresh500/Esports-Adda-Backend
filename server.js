@@ -1,6 +1,7 @@
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const { Server } = require("socket.io");
 require("dotenv").config();
 const { connectDB } = require("./src/config/db");
@@ -24,23 +25,31 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 
-const ALLOWED_ORIGINS = [
-  "http://localhost:5050",
-  "http://localhost:3000",
-  "http://localhost:3001",
-];
+const ALLOWED_ORIGINS = (
+  process.env.ALLOWED_ORIGINS ||
+  "http://localhost:5050,http://localhost:3000,http://localhost:3001"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 // Connect to database
 connectDB();
 
 // Middleware
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
+app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // REST Routes
 app.get("/", (req, res) => {
   res.json({ message: "Esports Adda Backend is running" });
+});
+
+// Health check for Render and uptime pingers
+app.get("/health", (req, res) => {
+  res.status(200).json({ ok: true, uptime: process.uptime() });
 });
 
 app.use("/api/auth", authRoutes);
@@ -74,7 +83,9 @@ const io = new Server(server, {
 initSocket(io);
 
 // Start server (http server wraps express for Socket.io support)
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+// Bind 0.0.0.0 so Render's port-detect can reach the listener
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on port ${PORT}`);
   console.log(`Socket.io active`);
+  console.log(`Allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
 });

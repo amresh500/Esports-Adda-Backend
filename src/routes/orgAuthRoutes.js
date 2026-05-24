@@ -6,6 +6,7 @@ const authMiddleware = require("../middleware/auth");
 // Public routes
 router.post("/signup", orgAuthController.signup);
 router.post("/login", orgAuthController.login);
+router.post("/logout", orgAuthController.logout);
 router.get("/verify/:token", orgAuthController.verifyEmail);
 router.get("/all", orgAuthController.getAllOrganizationAccounts);
 

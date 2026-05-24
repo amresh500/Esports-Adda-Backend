@@ -33,4 +33,8 @@ router.get("/:tournamentId/matches/:matchNumber", tournamentController.getMatch)
 router.patch("/:tournamentId/matches/:matchNumber/schedule", authMiddleware, tournamentController.updateMatchSchedule);
 router.post("/:tournamentId/matches/:matchNumber/reset", authMiddleware, tournamentController.resetMatch);
 
+// Per-player stats (organizer-only)
+router.get("/:tournamentId/matches/:matchNumber/players", authMiddleware, tournamentController.getMatchPlayers);
+router.post("/:tournamentId/matches/:matchNumber/stats", authMiddleware, tournamentController.reportMatchStats);
+
 module.exports = router;

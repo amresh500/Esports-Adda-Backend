@@ -6,8 +6,8 @@ exports.getMyProfile = async (req, res) => {
   try {
     let profile = await PlayerProfile.findOne({ user: req.userId })
       .populate("user", "username email")
-      .populate("currentTeam", "name tag")
-      .populate("teams", "name tag")
+      .populate("currentTeam", "name tag game games logo")
+      .populate("teams", "name tag game games logo")
       .populate("organizations.organization", "name tag");
 
     // Create profile if doesn't exist
@@ -18,8 +18,8 @@ exports.getMyProfile = async (req, res) => {
       await profile.save();
       profile = await PlayerProfile.findById(profile._id)
         .populate("user", "username email")
-        .populate("currentTeam", "name tag")
-        .populate("teams", "name tag")
+        .populate("currentTeam", "name tag game games logo")
+        .populate("teams", "name tag game games logo")
         .populate("organizations.organization", "name tag");
     }
 

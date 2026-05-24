@@ -125,6 +125,17 @@ const teamSchema = new mongoose.Schema(
       wins: { type: Number, default: 0 },
       championships: { type: Number, default: 0 },
     },
+    achievements: [
+      {
+        title: { type: String, required: true },
+        description: { type: String },
+        date: { type: Date },
+        game: { type: String },
+        tournament: { type: mongoose.Schema.Types.ObjectId, ref: "Tournament" },
+        placement: { type: Number },
+        auto: { type: Boolean, default: false },
+      },
+    ],
     isActive: {
       type: Boolean,
       default: true,
