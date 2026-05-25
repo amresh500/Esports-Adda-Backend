@@ -61,8 +61,15 @@ exports.signup = async (req, res) => {
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5050';
     const url = `${frontendUrl}/verify-email?token=${verificationToken}`;
-        // Send verification email via Resend (HTTP API — works on Render, unlike SMTP)
-    await sendVerificationEmail({ to: email, username, url });
+    // Send verification email. Failure must NOT 500 the signup — the user
+    // is already created, so we log and let them resend later.
+    let emailSent = true;
+    try {
+      await sendVerificationEmail({ to: email, username, url, accountType: "user" });
+    } catch (mailError) {
+      emailSent = false;
+      console.error("Verification email failed to send:", mailError.message);
+    }
 
     // Create player profile with provided data
     if (profileData) {
@@ -89,8 +96,11 @@ exports.signup = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "User registered successfully",
+      message: emailSent
+        ? "User registered successfully. Please check your email to verify your account."
+        : "User registered, but we couldn't send the verification email. Please try resending it later.",
       data: {
+        emailSent,
         user: {
           id: user._id,
           username: user.username,

@@ -1,6 +1,7 @@
 const OrganizationAccount = require("../models/OrganizationAccount");
 const Team = require("../models/Team");
 const jwt = require("jsonwebtoken");
+const { sendVerificationEmail } = require("../utils/mailer");
 
 // Generate JWT Token for organization
 const generateToken = (orgId) => {
@@ -103,40 +104,20 @@ exports.signup = async (req, res) => {
     });
 
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5050";
-    const url = `${frontendUrl}/verify-organization?token=${verificationToken}`;
-    const nodemailer = require("nodemailer");
-
-    // Configure nodemailer transporter
-    const transporter = nodemailer.createTransport({
-      service: "Gmail",
-      auth: {
-        user: process.env.USER_EMAIL,
-        pass: process.env.USER_PASS,
-      },
-    });
-
-    // Send verification email
-    const mailOptions = {
-      from: `"Esports Adda" <no-reply@esportsadda.com>`,
-      to: email,
-      subject: "Verify Your Organization Account - Esports Adda",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">Welcome to Esports Adda!</h2>
-          <p>Hi ${organizationName},</p>
-          <p>Thank you for registering your organization! Please verify your email address by clicking the button below:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${url}" style="background-color: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Verify Email</a>
-          </div>
-          <p>Or copy and paste this link into your browser:</p>
-          <p style="word-break: break-all; color: #666;">${url}</p>
-          <p style="color: #999; font-size: 12px; margin-top: 30px;">This link will expire in 24 hours.</p>
-          <p style="color: #999; font-size: 12px;">If you didn't create an account, please ignore this email.</p>
-        </div>
-      `,
-      text: `Welcome to Esports Adda! Please verify your organization email by clicking this link: ${url}`,
-    };
-
+        // Send verification email. Failure must NOT 500 the signup — the org
+    // account is already created, so we log and let them resend later.
+    let emailSent = true;
+    try {
+      await sendVerificationEmail({
+        to: email,
+        username: organizationName,
+        url,
+        accountType: "organization",
+      });
+    } catch (mailError) {
+      emailSent = false;
+      console.error("Org verification email failed to send:", mailError.message);
+    }
     await transporter.sendMail(mailOptions);
 
     res.status(201).json({
