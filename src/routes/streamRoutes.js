@@ -18,6 +18,6 @@ router.delete("/:id", authMiddleware, streamController.deleteStream);
 
 // Admin routes
 router.patch("/:id/approve", authMiddleware, adminAuth, streamController.approveStream);
-router.patch("/:id/viewers", streamController.updateViewerCount);
+router.patch("/:id/viewers", authMiddleware, streamController.updateViewerCount);
 
 module.exports = router;

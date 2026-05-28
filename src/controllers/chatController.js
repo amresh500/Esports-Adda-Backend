@@ -14,7 +14,7 @@ const VALID_GAMES = [
 ];
 
 // GET /api/chat/:game?cursor=<lastMessageId>&limit=50
-// Public — anyone can read messages
+// Auth required — only logged-in users can read messages
 exports.getMessages = async (req, res) => {
   try {
     const { game } = req.params;
@@ -173,7 +173,8 @@ exports.sendAnnouncement = async (req, res) => {
 };
 
 // DELETE /api/chat/:game/:messageId
-// Auth required — own message, or org account for any message in their hub
+// Auth required — users can only delete their own messages.
+// Hub-wide moderation is handled separately via the admin routes.
 exports.deleteMessage = async (req, res) => {
   try {
     const { messageId } = req.params;

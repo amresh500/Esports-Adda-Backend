@@ -104,7 +104,8 @@ exports.signup = async (req, res) => {
     });
 
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5050";
-        // Send verification email. Failure must NOT 500 the signup — the org
+    const url = `${frontendUrl}/verify-email?token=${verificationToken}`;
+    // Send verification email. Failure must NOT 500 the signup — the org
     // account is already created, so we log and let them resend later.
     let emailSent = true;
     try {
@@ -118,12 +119,14 @@ exports.signup = async (req, res) => {
       emailSent = false;
       console.error("Org verification email failed to send:", mailError.message);
     }
-    await transporter.sendMail(mailOptions);
 
     res.status(201).json({
       success: true,
-      message: "Organization registered successfully. Please check your email to verify your account.",
+      message: emailSent
+        ? "Organization registered successfully. Please check your email to verify your account."
+        : "Organization registered, but we couldn't send the verification email. Please try resending it later.",
       data: {
+        emailSent,
         organization: {
           id: organization._id,
           organizationName: organization.organizationName,

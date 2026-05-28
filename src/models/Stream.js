@@ -111,6 +111,8 @@ const streamSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
   }
 );
 
@@ -127,6 +129,16 @@ streamSchema.methods.getEmbedUrl = function () {
   const videoId = this.extractVideoId(this.youtubeUrl);
   return videoId ? `https://www.youtube.com/embed/${videoId}` : "";
 };
+
+// Virtual: iframe-ready embed URL, included in every JSON response.
+// Methods get stripped during serialization, so the frontend needs this.
+streamSchema.virtual("embedUrl").get(function () {
+  if (!this.youtubeUrl) return "";
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = this.youtubeUrl.match(regExp);
+  const videoId = match && match[2].length === 11 ? match[2] : null;
+  return videoId ? `https://www.youtube.com/embed/${videoId}` : "";
+});
 
 // Method to update status based on time
 streamSchema.methods.updateStatus = function () {

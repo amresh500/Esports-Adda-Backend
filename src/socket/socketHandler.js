@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const cookie = require("cookie");
 const Message = require("../models/Message");
 const User = require("../models/User");
 const OrganizationAccount = require("../models/OrganizationAccount");
@@ -32,20 +33,21 @@ function initSocket(io) {
 
   // ─── Socket.io Auth Middleware ───────────────────────────────────────────
   // Runs before every new socket connection.
-  // Reads the JWT from socket.handshake.auth.token and verifies it.
-  // If valid: attaches userId + accountType + displayName to the socket object.
-  // If invalid/missing: allows connection as a guest (read-only).
+  // The JWT lives in an httpOnly cookie, which JS on the client can't read —
+  // so we parse it from the handshake's Cookie header. We also accept
+  // handshake.auth.token as a fallback (e.g. non-browser clients).
+  // If no valid token: reject the connection (chat requires login).
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth?.token;
+    let token = socket.handshake.auth?.token;
+
+    if (!token && socket.handshake.headers?.cookie) {
+      const parsed = cookie.parse(socket.handshake.headers.cookie);
+      token = parsed.token;
+    }
 
     if (!token) {
-      // Guest connection — can receive messages but cannot send
-      socket.userId = null;
-      socket.accountType = null;
-      socket.displayName = "Guest";
-      socket.senderTag = null;
-      socket.senderAvatar = null;
-      return next();
+      // Reading chat now requires authentication — reject guest connections
+      return next(new Error("Authentication required"));
     }
 
     try {
@@ -75,13 +77,8 @@ function initSocket(io) {
 
       next();
     } catch (err) {
-      // Expired or invalid token — treat as guest
-      socket.userId = null;
-      socket.accountType = null;
-      socket.displayName = "Guest";
-      socket.senderTag = null;
-      socket.senderAvatar = null;
-      next();
+      // Expired or invalid token — reject the connection
+      return next(new Error("Authentication required"));
     }
   });
 

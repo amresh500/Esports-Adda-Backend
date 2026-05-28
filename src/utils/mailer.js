@@ -1,8 +1,7 @@
-// Sends email via the Mailjet HTTP API (port 443) — works on Render, which
-// blocks outbound SMTP. Needs MAILJET_API_KEY / MAILJET_SECRET_KEY / EMAIL_FROM.
-const MAILJET_API_KEY = process.env.MAILJET_API_KEY;
-const MAILJET_SECRET_KEY = process.env.MAILJET_SECRET_KEY;
-// EMAIL_FROM must be a verified sender in Mailjet (Senders & Domains).
+// Sends email via the Mailersend HTTP API (port 443) — works on Render, which
+// blocks outbound SMTP. Needs MAILERSEND_API_KEY and EMAIL_FROM.
+// EMAIL_FROM must be a verified sender in Mailersend (Email → Domains & Senders).
+const MAILERSEND_API_KEY = process.env.MAILERSEND_API_KEY;
 const FROM_EMAIL = process.env.EMAIL_FROM || "no-reply@example.com";
 const FROM_NAME = process.env.EMAIL_FROM_NAME || "Esports Adda";
 
@@ -29,36 +28,29 @@ function buildHtml({ username, url, accountType }) {
 
 async function sendEmail({ to, subject, html, text }) {
   // Not configured (e.g. local dev): log instead of sending.
-  if (!MAILJET_API_KEY || !MAILJET_SECRET_KEY) {
-    console.log(`[mailer] Mailjet keys not set. Email to ${to} skipped.`);
+  if (!MAILERSEND_API_KEY) {
+    console.log(`[mailer] MAILERSEND_API_KEY not set. Email to ${to} skipped.`);
     return;
   }
 
-  const auth = Buffer.from(`${MAILJET_API_KEY}:${MAILJET_SECRET_KEY}`).toString("base64");
-
-  const res = await fetch("https://api.mailjet.com/v3.1/send", {
+  const res = await fetch("https://api.mailersend.com/v1/email", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Basic ${auth}`,
+      Authorization: `Bearer ${MAILERSEND_API_KEY}`,
     },
     body: JSON.stringify({
-      Messages: [
-        {
-          From: { Email: FROM_EMAIL, Name: FROM_NAME },
-          To: [{ Email: to }],
-          Subject: subject,
-          HTMLPart: html,
-          TextPart: text,
-        },
-      ],
+      from: { email: FROM_EMAIL, name: FROM_NAME },
+      to: [{ email: to }],
+      subject,
+      html,
+      text,
     }),
   });
 
-  const result = await res.json().catch(() => ({}));
-  const status = result.Messages && result.Messages[0] && result.Messages[0].Status;
-  if (!res.ok || status !== "success") {
-    throw new Error(`Mailjet failed to send email: ${JSON.stringify(result)}`);
+  if (!res.ok) {
+    const result = await res.json().catch(() => ({}));
+    throw new Error(`Mailersend failed to send email: ${JSON.stringify(result)}`);
   }
 }
 
