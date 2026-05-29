@@ -40,6 +40,13 @@ const userSchema = new mongoose.Schema({
   verificationTokenExpiration: {
     type: Date,
   },
+  // ── Password reset (OTP) ────────────────────────────────────────────
+  resetPasswordOTP: {
+    type: String,
+  },
+  resetPasswordExpiration: {
+    type: Date,
+  },
   // ── Admin & Moderation ──────────────────────────────────────────────
   isAdmin: {
     type: Boolean,

@@ -1,7 +1,7 @@
-// Sends email via the Mailersend HTTP API (port 443) — works on Render, which
-// blocks outbound SMTP. Needs MAILERSEND_API_KEY and EMAIL_FROM.
-// EMAIL_FROM must be a verified sender in Mailersend (Email → Domains & Senders).
-const MAILERSEND_API_KEY = process.env.MAILERSEND_API_KEY;
+// Sends email via the Brevo HTTP API (port 443) — works on Render, which
+// blocks outbound SMTP. Needs BREVO_API_KEY and EMAIL_FROM.
+// EMAIL_FROM must be a verified sender in Brevo (Senders, Domains & Dedicated IPs).
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const FROM_EMAIL = process.env.EMAIL_FROM || "no-reply@example.com";
 const FROM_NAME = process.env.EMAIL_FROM_NAME || "Esports Adda";
 
@@ -28,30 +28,54 @@ function buildHtml({ username, url, accountType }) {
 
 async function sendEmail({ to, subject, html, text }) {
   // Not configured (e.g. local dev): log instead of sending.
-  if (!MAILERSEND_API_KEY) {
-    console.log(`[mailer] MAILERSEND_API_KEY not set. Email to ${to} skipped.`);
+  if (!BREVO_API_KEY) {
+    console.log(`[mailer] BREVO_API_KEY not set. Email to ${to} skipped.`);
     return;
   }
 
-  const res = await fetch("https://api.mailersend.com/v1/email", {
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${MAILERSEND_API_KEY}`,
+      accept: "application/json",
+      "api-key": BREVO_API_KEY,
     },
     body: JSON.stringify({
-      from: { email: FROM_EMAIL, name: FROM_NAME },
+      sender: { email: FROM_EMAIL, name: FROM_NAME },
       to: [{ email: to }],
       subject,
-      html,
-      text,
+      htmlContent: html,
+      textContent: text,
     }),
   });
 
   if (!res.ok) {
     const result = await res.json().catch(() => ({}));
-    throw new Error(`Mailersend failed to send email: ${JSON.stringify(result)}`);
+    throw new Error(`Brevo failed to send email: ${JSON.stringify(result)}`);
   }
+}
+
+function buildResetHtml({ otp }) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #333;">Reset your password</h2>
+      <p>We received a request to reset your Esports Adda password. Use the code below to continue:</p>
+      <div style="text-align: center; margin: 30px 0;">
+        <span style="font-size: 32px; letter-spacing: 8px; font-weight: bold; color: #4F46E5;">${otp}</span>
+      </div>
+      <p style="color: #999; font-size: 12px;">This code expires in 10 minutes.</p>
+      <p style="color: #999; font-size: 12px;">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+    </div>
+  `;
+}
+
+async function sendPasswordResetEmail({ to, otp }) {
+  await sendEmail({
+    to,
+    subject: "Reset Your Password - Esports Adda",
+    html: buildResetHtml({ otp }),
+    text: `Your Esports Adda password reset code is ${otp}. It expires in 10 minutes. If you didn't request this, ignore this email.`,
+  });
 }
 
 async function sendVerificationEmail({ to, username, url, accountType = "user" }) {
@@ -67,4 +91,4 @@ async function sendVerificationEmail({ to, username, url, accountType = "user" }
   });
 }
 
-module.exports = { sendEmail, sendVerificationEmail };
+module.exports = { sendEmail, sendVerificationEmail, sendPasswordResetEmail };

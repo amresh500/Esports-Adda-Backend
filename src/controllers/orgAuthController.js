@@ -2,12 +2,13 @@ const OrganizationAccount = require("../models/OrganizationAccount");
 const Team = require("../models/Team");
 const jwt = require("jsonwebtoken");
 const { sendVerificationEmail } = require("../utils/mailer");
+const { validatePassword } = require("../utils/passwordPolicy");
 
 // Generate JWT Token for organization
 const generateToken = (orgId) => {
   return jwt.sign(
     { id: orgId, accountType: "organization" },
-    process.env.JWT_SECRET || "your-secret-key-change-in-production",
+    process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
 };
@@ -40,6 +41,12 @@ exports.signup = async (req, res) => {
         success: false,
         message: "Passwords do not match",
       });
+    }
+
+    // Enforce password strength
+    const pwCheck = validatePassword(password);
+    if (!pwCheck.valid) {
+      return res.status(400).json({ success: false, message: pwCheck.message });
     }
 
     // Check if organization email already exists
@@ -104,7 +111,7 @@ exports.signup = async (req, res) => {
     });
 
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5050";
-    const url = `${frontendUrl}/verify-email?token=${verificationToken}`;
+    const url = `${frontendUrl}/verify-organization?token=${verificationToken}`;
     // Send verification email. Failure must NOT 500 the signup — the org
     // account is already created, so we log and let them resend later.
     let emailSent = true;
@@ -203,7 +210,7 @@ exports.login = async (req, res) => {
     const maxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
     const token = jwt.sign(
       { id: organization._id, accountType: "organization" },
-      process.env.JWT_SECRET || "your-secret-key-change-in-production",
+      process.env.JWT_SECRET,
       { expiresIn: rememberMe ? "30d" : "7d" }
     );
 

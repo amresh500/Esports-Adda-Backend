@@ -1,7 +1,10 @@
 const User = require("../models/User");
 const PlayerProfile = require("../models/PlayerProfile");
+const OrganizationAccount = require("../models/OrganizationAccount");
+const Team = require("../models/Team");
 const jwt = require("jsonwebtoken");
 const { sendVerificationEmail } = require("../utils/mailer");
+const { validatePassword } = require("../utils/passwordPolicy");
 
 // Generate JWT Token
 const generateToken = (userId) => {
@@ -10,6 +13,57 @@ const generateToken = (userId) => {
     process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
+};
+
+// GET /api/auth/check-availability?username=foo&email=bar@x.com
+// Public — live signup validation. Cross-checks User, OrganizationAccount,
+// and Team to mirror the conflict rules enforced on actual signup.
+// Either or both query params may be supplied.
+exports.checkAvailability = async (req, res) => {
+  try {
+    const username = req.query.username?.trim();
+    const email = req.query.email?.trim().toLowerCase();
+
+    if (!username && !email) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide a username or email to check",
+      });
+    }
+
+    const result = {};
+
+    if (username) {
+      const tagUpper = username.toUpperCase();
+      const [userHit, orgHit, teamHit] = await Promise.all([
+        User.exists({ username }),
+        OrganizationAccount.exists({
+          $or: [{ organizationName: username }, { tag: tagUpper }],
+        }),
+        Team.exists({ $or: [{ name: username }, { tag: tagUpper }] }),
+      ]);
+      result.username = {
+        value: username,
+        available: !userHit && !orgHit && !teamHit,
+      };
+    }
+
+    if (email) {
+      const [userHit, orgHit] = await Promise.all([
+        User.exists({ email }),
+        OrganizationAccount.exists({ email }),
+      ]);
+      result.email = {
+        value: email,
+        available: !userHit && !orgHit,
+      };
+    }
+
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error("Check availability error:", error);
+    res.status(500).json({ success: false, message: "Failed to check availability" });
+  }
 };
 
 // Signup Controller
@@ -31,6 +85,12 @@ exports.signup = async (req, res) => {
         success: false,
         message: "Passwords do not match",
       });
+    }
+
+    // Enforce password strength
+    const pwCheck = validatePassword(password);
+    if (!pwCheck.valid) {
+      return res.status(400).json({ success: false, message: pwCheck.message });
     }
 
     // Check if user already exists
@@ -199,7 +259,7 @@ exports.login = async (req, res) => {
     const maxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
     const token = jwt.sign(
       { id: user._id },
-      process.env.JWT_SECRET || "your-secret-key-change-in-production",
+      process.env.JWT_SECRET,
       { expiresIn: rememberMe ? "30d" : "7d" }
     );
 

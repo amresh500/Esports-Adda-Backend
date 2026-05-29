@@ -190,6 +190,14 @@ const organizationAccountSchema = new mongoose.Schema({
     type: Date,
   },
 
+  // Password reset (OTP)
+  resetPasswordOTP: {
+    type: String,
+  },
+  resetPasswordExpiration: {
+    type: Date,
+  },
+
   // Account status
   isActive: {
     type: Boolean,
