@@ -47,6 +47,27 @@ const userSchema = new mongoose.Schema({
   resetPasswordExpiration: {
     type: Date,
   },
+  // ── Email change (pending until verified at new address) ────────────
+  pendingEmail: {
+    type: String,
+    lowercase: true,
+    trim: true,
+  },
+  pendingEmailToken: {
+    type: String,
+  },
+  pendingEmailExpiration: {
+    type: Date,
+  },
+  // ── Soft delete ─────────────────────────────────────────────────────
+  isDeleted: {
+    type: Boolean,
+    default: false,
+  },
+  deletedAt: {
+    type: Date,
+    default: null,
+  },
   // ── Admin & Moderation ──────────────────────────────────────────────
   isAdmin: {
     type: Boolean,

@@ -78,6 +78,30 @@ async function sendPasswordResetEmail({ to, otp }) {
   });
 }
 
+function buildEmailChangeHtml({ url }) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #333;">Confirm your new email</h2>
+      <p>We received a request to change the email on your Esports Adda account to this address. Click the button below to confirm:</p>
+      <div style="text-align: center; margin: 30px 0;">
+        <a href="${url}" style="background-color: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Confirm New Email</a>
+      </div>
+      <p>Or copy this link into your browser:</p>
+      <p style="word-break: break-all; color: #666;">${url}</p>
+      <p style="color: #999; font-size: 12px; margin-top: 30px;">This link expires in 24 hours. If you didn't request this change, you can safely ignore it — your current email stays unchanged.</p>
+    </div>
+  `;
+}
+
+async function sendEmailChangeVerification({ to, url }) {
+  await sendEmail({
+    to,
+    subject: "Confirm Your New Email - Esports Adda",
+    html: buildEmailChangeHtml({ url }),
+    text: `Confirm your new Esports Adda email by clicking: ${url} — link expires in 24 hours.`,
+  });
+}
+
 async function sendVerificationEmail({ to, username, url, accountType = "user" }) {
   const subject =
     accountType === "organization"
@@ -91,4 +115,9 @@ async function sendVerificationEmail({ to, username, url, accountType = "user" }
   });
 }
 
-module.exports = { sendEmail, sendVerificationEmail, sendPasswordResetEmail };
+module.exports = {
+  sendEmail,
+  sendVerificationEmail,
+  sendPasswordResetEmail,
+  sendEmailChangeVerification,
+};

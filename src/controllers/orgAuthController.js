@@ -184,6 +184,15 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Block deleted accounts — but tell them how to restore.
+    if (organization.isDeleted) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been deleted. You can restore it within 30 days from the login page.",
+        code: "ACCOUNT_DELETED",
+      });
+    }
+
     // Check if email is verified
     if (!organization.isVerified) {
       return res.status(403).json({
