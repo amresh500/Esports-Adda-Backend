@@ -124,14 +124,28 @@ exports.createTeam = async (req, res) => {
 // Get my teams
 exports.getMyTeams = async (req, res) => {
   try {
-    const teams = await Team.find({ owner: req.userId }).populate(
-      "owner",
-      "username email"
-    );
+    // Return teams the user OWNS as well as teams where they are on a game roster,
+    // so added players also see the team(s) they belong to in their dashboard.
+    const teams = await Team.find({
+      $or: [
+        { owner: req.userId },
+        { "games.roster.player": req.userId },
+      ],
+    }).populate("owner", "username email");
+
+    // Tag each team with the caller's relationship so the UI can distinguish
+    // "owned by me" from "I'm a member" (e.g. hide edit controls for members).
+    const data = teams.map((t) => {
+      const obj = t.toObject();
+      obj.isOwner = t.owner && t.owner._id
+        ? t.owner._id.toString() === req.userId
+        : t.owner?.toString() === req.userId;
+      return obj;
+    });
 
     res.status(200).json({
       success: true,
-      data: { teams, count: teams.length },
+      data: { teams: data, count: data.length },
     });
   } catch (error) {
     console.error("Get my teams error:", error);
