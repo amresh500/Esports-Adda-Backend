@@ -559,10 +559,14 @@ exports.getAdminOrganization = async (req, res) => {
       req.accountType
     );
 
+    // This endpoint is a CHECK ("is this player an org admin?"), not a gate.
+    // A regular player who isn't an org admin is a normal, expected answer — so
+    // return 200 with isAdmin:false instead of 403 (which logs a console error).
     if (!authorized || !organization) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not an admin of any organization",
+      return res.status(200).json({
+        success: true,
+        isAdmin: false,
+        data: { organization: null },
       });
     }
 
@@ -572,6 +576,7 @@ exports.getAdminOrganization = async (req, res) => {
 
     res.status(200).json({
       success: true,
+      isAdmin: true,
       data: { organization: orgData },
     });
   } catch (error) {

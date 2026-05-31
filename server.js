@@ -47,6 +47,14 @@ app.use(cookieParser());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
+// Ensure req.body is always an object. express.json() leaves it undefined for
+// requests sent with no JSON payload (e.g. a PATCH with no body), which makes
+// `req.body.x` throw. This guard prevents that class of 500 across all routes.
+app.use((req, res, next) => {
+  if (req.body == null) req.body = {};
+  next();
+});
+
 // REST Routes
 app.get("/", (req, res) => {
   res.json({ message: "Esports Adda Backend is running" });

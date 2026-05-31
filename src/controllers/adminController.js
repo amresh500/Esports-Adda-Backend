@@ -84,7 +84,13 @@ exports.getFlaggedMessages = async (req, res) => {
       isFlagged: true,
       isDeleted: false,
       "moderationAction.action": { $exists: false },
-      reportCount: { $gte: Number(minReports) },
+      // Show a message if it has enough user reports OR it was auto-flagged by
+      // the profanity filter. Auto-flagged messages have reportCount 0, so a plain
+      // reportCount >= minReports check would hide every system-flagged message.
+      $or: [
+        { reportCount: { $gte: Number(minReports) } },
+        { autoFlagged: true },
+      ],
     };
     if (game) filter.game = game;
 
@@ -117,7 +123,7 @@ exports.dismissReports = async (req, res) => {
       action: "dismissed",
       actionBy: req.userId,
       actionAt: new Date(),
-      note: req.body.note || "",
+      note: (req.body && req.body.note) || "",
     };
     await message.save();
 
@@ -146,7 +152,7 @@ exports.deleteMessageAdmin = async (req, res) => {
       action: "deleted",
       actionBy: req.userId,
       actionAt: new Date(),
-      note: req.body.note || "",
+      note: (req.body && req.body.note) || "",
     };
     await message.save();
 
@@ -170,15 +176,23 @@ exports.warnMessageSender = async (req, res) => {
     const message = await Message.findById(req.params.id);
     if (!message) return res.status(404).json({ success: false, message: "Message not found" });
 
+    // req.body can be undefined when the client sends no JSON payload
+    const body = req.body || {};
+
+    const warnReason =
+      body.reason || `Warned for flagged message in ${message.game} chat`;
+
     // Only warn User senders (not OrganizationAccount)
+    let warnedUserId = null;
     if (message.senderModel === "User") {
       const sender = await User.findById(message.sender);
       if (sender) {
         sender.warnings.push({
-          reason: req.body.reason || `Warned for flagged message in ${message.game} chat`,
+          reason: warnReason,
           issuedBy: req.userId,
         });
         await sender.save();
+        warnedUserId = sender._id;
       }
     }
 
@@ -187,7 +201,7 @@ exports.warnMessageSender = async (req, res) => {
       action: "warned",
       actionBy: req.userId,
       actionAt: new Date(),
-      note: req.body.note || "",
+      note: body.note || "",
     };
     await message.save();
 
@@ -198,6 +212,20 @@ exports.warnMessageSender = async (req, res) => {
       targetId: message._id,
       details: `Warned sender ${message.senderName} for message in ${message.game}`,
     });
+
+    // Notify the warned player (bell + persisted notification). Only players are
+    // warned here, so this is skipped for organization senders.
+    if (warnedUserId) {
+      await sendNotification({
+        recipientId: warnedUserId,
+        recipientModel: "User",
+        type: "user_warned",
+        title: "Account Warning",
+        message: `You received a warning for a message in ${message.game} chat. Reason: ${warnReason}`,
+        refId: warnedUserId,
+        refModel: "User",
+      });
+    }
 
     res.json({ success: true, message: "Sender warned and reports resolved" });
   } catch (error) {
