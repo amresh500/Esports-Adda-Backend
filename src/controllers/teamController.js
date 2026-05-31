@@ -454,40 +454,57 @@ exports.removePlayerFromRoster = async (req, res) => {
 };
 
 // Leave team (for players)
+// Accepts an optional teamId in the body. This matters because members added via
+// the org/addMember path don't have `currentTeam` set — relying on currentTeam
+// alone would refuse to remove them. We resolve the target team from (in order):
+// the provided teamId, the profile's currentTeam, or the single team in teams[].
 exports.leaveTeam = async (req, res) => {
   try {
     const playerProfile = await PlayerProfile.findOne({ user: req.userId });
-
-    if (!playerProfile || !playerProfile.currentTeam) {
-      return res.status(400).json({
-        success: false,
-        message: "You are not currently in any team",
-      });
+    if (!playerProfile) {
+      return res.status(400).json({ success: false, message: "You are not currently in any team" });
     }
 
-    const team = await Team.findById(playerProfile.currentTeam);
+    const bodyTeamId = req.body && req.body.teamId;
 
-    if (!team) {
-      // Team no longer exists, just clear the profile
+    // Figure out which team to leave.
+    let targetTeamId =
+      bodyTeamId ||
+      (playerProfile.currentTeam && playerProfile.currentTeam.toString()) ||
+      (playerProfile.teams && playerProfile.teams.length === 1
+        ? playerProfile.teams[0].toString()
+        : null);
+
+    // Fallback: if still unknown, find any team where this user is on a roster.
+    if (!targetTeamId) {
+      const rosterTeam = await Team.findOne({ "games.roster.player": req.userId }).select("_id");
+      targetTeamId = rosterTeam ? rosterTeam._id.toString() : null;
+    }
+
+    if (!targetTeamId) {
+      return res.status(400).json({ success: false, message: "You are not currently in any team" });
+    }
+
+    const team = await Team.findById(targetTeamId);
+
+    if (team) {
+      // Remove the player from every game roster on this team.
+      team.games.forEach((gameRoster) => {
+        gameRoster.roster = gameRoster.roster.filter(
+          (p) => p.player.toString() !== req.userId
+        );
+      });
+      await team.save();
+    }
+
+    // Clean up the player's profile: drop this team from teams[] and clear
+    // currentTeam if it pointed here.
+    playerProfile.teams = (playerProfile.teams || []).filter(
+      (t) => t.toString() !== targetTeamId
+    );
+    if (playerProfile.currentTeam && playerProfile.currentTeam.toString() === targetTeamId) {
       playerProfile.currentTeam = null;
-      await playerProfile.save();
-      return res.status(200).json({
-        success: true,
-        message: "Left team successfully",
-      });
     }
-
-    // Remove player from all game rosters
-    team.games.forEach((gameRoster) => {
-      gameRoster.roster = gameRoster.roster.filter(
-        (p) => p.player.toString() !== req.userId
-      );
-    });
-
-    await team.save();
-
-    // Clear current team from player profile
-    playerProfile.currentTeam = null;
     await playerProfile.save();
 
     res.status(200).json({
@@ -712,10 +729,11 @@ exports.addMember = async (req, res) => {
 
     await team.save();
 
-    // Add team to player's profile
+    // Add team to player's profile AND set it as their current team, so the
+    // member sees it in their dashboard and can later leave it cleanly.
     await PlayerProfile.findOneAndUpdate(
       { user: player._id },
-      { $addToSet: { teams: team._id } },
+      { $addToSet: { teams: team._id }, $set: { currentTeam: team._id } },
       { new: true }
     );
 
