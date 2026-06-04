@@ -1,11 +1,22 @@
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const compression = require("compression");
 const cookieParser = require("cookie-parser");
 const { Server } = require("socket.io");
 require("dotenv").config();
 const { connectDB } = require("./src/config/db");
 const { initSocket } = require("./src/socket/socketHandler");
+const sanitizeMongo = require("./src/middleware/sanitize");
+const { globalLimiter } = require("./src/middleware/rateLimiters");
+
+// Fail fast if the JWT secret is missing or obviously weak. Without this,
+// jwt.sign / jwt.verify would throw at request time and 500 every auth call.
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  console.error("FATAL: JWT_SECRET must be set and at least 32 characters.");
+  process.exit(1);
+}
 
 // Import routes
 const authRoutes = require("./src/routes/authRoutes");
@@ -36,6 +47,23 @@ const ALLOWED_ORIGINS = (
 // Connect to database
 connectDB();
 
+// Behind Render's proxy — required for express-rate-limit to see real client
+// IPs (X-Forwarded-For) and for Secure cookies to be set correctly.
+app.set("trust proxy", 1);
+
+// Security headers. crossOriginResourcePolicy is relaxed because the frontend
+// is served from a different origin (Vercel) and pulls JSON from this API.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
+
+// gzip responses
+app.use(compression());
+
+// Global rate limit (per-IP flood guard). Stricter limiters are applied on
+// the auth routes themselves.
+app.use(globalLimiter);
+
 // Middleware
 app.use(cors({
   origin: ALLOWED_ORIGINS,
@@ -44,8 +72,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(cookieParser());
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+app.use(express.json({ limit: "200kb" }));
+app.use(express.urlencoded({ extended: true, limit: "200kb" }));
 
 // Ensure req.body is always an object. express.json() leaves it undefined for
 // requests sent with no JSON payload (e.g. a PATCH with no body), which makes
@@ -54,6 +82,10 @@ app.use((req, res, next) => {
   if (req.body == null) req.body = {};
   next();
 });
+
+// Strip MongoDB operator keys ($ne, $gt, …) from user input. Must run after
+// the body parser and the body-default guard so it has something to walk.
+app.use(sanitizeMongo);
 
 // REST Routes
 app.get("/", (req, res) => {
