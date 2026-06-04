@@ -290,11 +290,6 @@ tournamentSchema.methods.generateSingleEliminationBracket = function (
   const byes = bracketSize - participantCount;
   let matchNumber = 1;
 
-  console.log("=== Generating Single Elimination Bracket ===");
-  console.log("Participant count:", participantCount);
-  console.log("Bracket size (next power of 2):", bracketSize);
-  console.log("Total rounds:", rounds);
-  console.log("Byes:", byes);
 
   // Seed participants: top seeds get byes
   // Byes are distributed to the first N matches in round 1
@@ -317,8 +312,6 @@ tournamentSchema.methods.generateSingleEliminationBracket = function (
     cumulative += matchesPerRound[r];
   }
 
-  console.log("Matches per round:", matchesPerRound);
-  console.log("Round start match numbers:", roundStartMatch);
 
   // Generate all matches
   for (let round = 1; round <= rounds; round++) {
@@ -358,9 +351,7 @@ tournamentSchema.methods.generateSingleEliminationBracket = function (
       if (round < rounds) {
         const nextRoundStart = roundStartMatch[round + 1];
         match.nextMatchWinner = nextRoundStart + Math.floor(i / 2);
-        console.log(`Match ${matchNumber}: nextMatchWinner = ${match.nextMatchWinner}`);
       } else {
-        console.log(`Match ${matchNumber}: FINAL (no nextMatchWinner)`);
       }
 
       matches.push(match);
@@ -402,7 +393,6 @@ tournamentSchema.methods.generateSingleEliminationBracket = function (
           }
         }
       }
-      console.log(`Match ${match.matchNumber}: BYE — ${match.participant1.teamName} auto-advanced`);
     } else if (!hasP1 && hasP2) {
       // P2 gets a bye
       match.winner = { ...match.participant2.toObject ? match.participant2.toObject() : match.participant2 };
@@ -429,18 +419,14 @@ tournamentSchema.methods.generateSingleEliminationBracket = function (
           }
         }
       }
-      console.log(`Match ${match.matchNumber}: BYE — ${match.participant2.teamName} auto-advanced`);
     } else if (!hasP1 && !hasP2) {
       // Empty match (both byes) — mark as completed
       match.status = "completed";
       match.completedAt = new Date();
-      console.log(`Match ${match.matchNumber}: EMPTY — both slots are byes`);
     }
   }
 
-  console.log("\n=== Generated matches summary ===");
   matches.forEach(m => {
-    console.log(`Match ${m.matchNumber} (Round ${m.round}): nextMatchWinner=${m.nextMatchWinner || 'FINAL'}, p1=${m.participant1?.teamName || 'TBD'}, p2=${m.participant2?.teamName || 'TBD'}, status=${m.status}`);
   });
 
   return matches;
