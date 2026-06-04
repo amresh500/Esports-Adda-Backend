@@ -6,6 +6,7 @@ const PlayerProfile = require("../models/PlayerProfile");
 const { resolveOrgPermission } = require("../utils/orgPermission");
 const Notification = require("../models/Notification");
 const { emitNotification } = require("../socket/socketHandler");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 /**
  * Auto-award achievements to the winning team, runner-up, their players,
@@ -144,7 +145,6 @@ async function awardTournamentAchievements(tournament) {
       }
     }
 
-    console.log("Auto-achievements awarded for tournament:", tournament.name);
   } catch (err) {
     console.error("awardTournamentAchievements error (non-fatal):", err.message);
   }
@@ -384,9 +384,10 @@ exports.getAllTournaments = async (req, res) => {
     if (isNepalOnly === "true") filter["requirements.isNepalOnly"] = true;
 
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
+        { name: { $regex: safe, $options: "i" } },
+        { description: { $regex: safe, $options: "i" } },
       ];
     }
 
@@ -440,20 +441,26 @@ exports.getTournamentById = async (req, res) => {
       });
     }
 
-    // Update tournament status based on dates
+    // Update tournament status based on dates. Save only when something
+    // actually changed — view-count is bumped atomically (below), so we don't
+    // re-write the whole document (matches, bracket, participants) per pageview.
     const { statusChanged, cancelledDueToLowTeams } = updateTournamentStatus(tournament);
 
-    // Increment view count
-    tournament.viewCount += 1;
-
-    // Save if status changed or view count incremented
-    await tournament.save();
-
-    if (cancelledDueToLowTeams) {
-      notifyLowTeamsCancellation(tournament).catch((e) =>
-        console.error("low-teams cancellation notification error:", e.message)
-      );
+    if (statusChanged) {
+      await tournament.save();
+      if (cancelledDueToLowTeams) {
+        notifyLowTeamsCancellation(tournament).catch((e) =>
+          console.error("low-teams cancellation notification error:", e.message)
+        );
+      }
     }
+
+    // Atomic counter increment, fire-and-forget. Avoids the lost-update race
+    // that `doc.viewCount += 1; doc.save()` had under concurrent reads.
+    Tournament.updateOne({ _id: tournament._id }, { $inc: { viewCount: 1 } }).catch((e) =>
+      console.error("viewCount increment error:", e.message)
+    );
+    tournament.viewCount = (tournament.viewCount || 0) + 1;
 
     res.status(200).json({
       success: true,
@@ -834,7 +841,6 @@ exports.generateBracket = async (req, res) => {
         (p) => p.status === "pending_approval"
       ).length;
       if (pendingCount > 0) {
-        console.log(`Warning: ${pendingCount} participants still pending approval`);
       }
       // Filter to only approved participants for bracket generation
       tournament.participants = tournament.participants.filter(
@@ -883,7 +889,6 @@ exports.generateBracket = async (req, res) => {
           streamUrl: match.streamUrl,
         });
       });
-      console.log(`Preserved data from ${existingMatchData.size} existing matches`);
     }
 
     const matches = tournament.generateBracket();
@@ -959,7 +964,6 @@ exports.generateBracket = async (req, res) => {
         }
       });
 
-      console.log('Re-applied existing match data to regenerated bracket');
     }
 
     tournament.matches = matches;
@@ -1011,10 +1015,6 @@ exports.generateBracket = async (req, res) => {
 // Register team for tournament
 exports.registerTeam = async (req, res) => {
   try {
-    console.log("=== Tournament Registration Request ===");
-    console.log("Tournament ID:", req.params.id);
-    console.log("Team ID:", req.body.teamId);
-    console.log("User ID:", req.userId);
 
     const { teamId, paymentScreenshot } = req.body;
 
@@ -1028,18 +1028,15 @@ exports.registerTeam = async (req, res) => {
     const tournament = await Tournament.findById(req.params.id);
 
     if (!tournament) {
-      console.log("Tournament not found");
       return res.status(404).json({
         success: false,
         message: "Tournament not found",
       });
     }
 
-    console.log("Tournament found:", tournament.name);
 
     // Check if tournament is published
     if (!tournament.isPublished) {
-      console.log("Tournament not published");
       return res.status(400).json({
         success: false,
         message: "Tournament is not published yet",
@@ -1048,12 +1045,8 @@ exports.registerTeam = async (req, res) => {
 
     // Check if registration is open
     const now = new Date();
-    console.log("Current date:", now);
-    console.log("Registration start:", tournament.registrationStartDate);
-    console.log("Registration end:", tournament.registrationEndDate);
 
     if (now < tournament.registrationStartDate) {
-      console.log("Registration has not started yet");
       return res.status(400).json({
         success: false,
         message: `Registration has not started yet. Registration opens on ${tournament.registrationStartDate.toLocaleDateString()}`,
@@ -1061,7 +1054,6 @@ exports.registerTeam = async (req, res) => {
     }
 
     if (now > tournament.registrationEndDate) {
-      console.log("Registration has closed");
       return res.status(400).json({
         success: false,
         message: `Registration has closed. Registration ended on ${tournament.registrationEndDate.toLocaleDateString()}`,
@@ -1071,7 +1063,6 @@ exports.registerTeam = async (req, res) => {
     // Check if tournament is full (exclude rejected participants)
     const activeParticipants = tournament.participants.filter(p => p.status !== "rejected");
     if (activeParticipants.length >= tournament.totalSlots) {
-      console.log("Tournament is full");
       return res.status(400).json({
         success: false,
         message: "Tournament is full",
@@ -1084,7 +1075,6 @@ exports.registerTeam = async (req, res) => {
     );
 
     if (alreadyRegistered) {
-      console.log("Team already registered");
       return res.status(400).json({
         success: false,
         message: "Team is already registered for this tournament",
@@ -1096,20 +1086,12 @@ exports.registerTeam = async (req, res) => {
     const team = await Team.findById(teamId);
 
     if (!team) {
-      console.log("Team not found");
       return res.status(404).json({
         success: false,
         message: "Team not found",
       });
     }
 
-    console.log("Team found:", team.name);
-    console.log("Team owner:", team.owner);
-    console.log("Team leader:", team.teamLeader);
-    console.log("Team organization:", team.organization);
-    console.log("Team games:", team.games);
-    console.log("Team game field:", team.game);
-    console.log("Tournament game:", tournament.game);
 
     // Check if team's game matches tournament game
     // First check team.game field (for player-created teams)
@@ -1118,7 +1100,6 @@ exports.registerTeam = async (req, res) => {
     const hasGameRoster = team.games && team.games.some(g => g.game === tournament.game);
 
     if (!teamGameMatches && !hasGameRoster) {
-      console.log("Team game does not match tournament game");
       return res.status(400).json({
         success: false,
         message: `This team is not registered for ${tournament.game}. The team needs to be for the same game as the tournament.`,
@@ -1140,10 +1121,8 @@ exports.registerTeam = async (req, res) => {
       );
     }
 
-    console.log("Permission check:", { isOwner, isTeamLeader, isOrgOwner, isRosterMember });
 
     if (!isOwner && !isTeamLeader && !isOrgOwner && !isRosterMember) {
-      console.log("No permission to register this team");
       return res.status(403).json({
         success: false,
         message: "You do not have permission to register this team",
@@ -1170,7 +1149,6 @@ exports.registerTeam = async (req, res) => {
     }
 
     // Add team to participants
-    console.log("Adding team to participants");
     tournament.participants.push({
       team: teamId,
       teamName: team.name,
@@ -1181,7 +1159,6 @@ exports.registerTeam = async (req, res) => {
     });
 
     await tournament.save();
-    console.log("Tournament saved successfully");
 
     res.status(200).json({
       success: true,
@@ -1450,9 +1427,7 @@ exports.getPaymentScreenshot = async (req, res) => {
 // Update tournament bracket/matches
 exports.updateBracket = async (req, res) => {
   try {
-    console.log("=== Update Bracket Request ===");
     const { matches } = req.body;
-    console.log("Received matches:", JSON.stringify(matches, null, 2));
 
     const tournament = await Tournament.findById(req.params.id);
 
@@ -1463,8 +1438,6 @@ exports.updateBracket = async (req, res) => {
       });
     }
 
-    console.log("Tournament organizer:", tournament.organizer);
-    console.log("Request user ID:", req.userId);
 
     // Check if user is the organizer
     const { authorized: canUpdateBracket } = await resolveOrgPermission(
@@ -1530,7 +1503,6 @@ exports.updateBracket = async (req, res) => {
       }
     });
 
-    console.log("Processed matches:", tournament.matches.length);
 
     // Use findByIdAndUpdate to avoid version conflicts
     const updatedTournament = await Tournament.findByIdAndUpdate(
@@ -1562,11 +1534,6 @@ exports.reportMatchResult = async (req, res) => {
     const { tournamentId, matchNumber } = req.params;
     const { winnerId, participant1Score, participant2Score } = req.body;
 
-    console.log("=== Report Match Result ===");
-    console.log("Tournament ID:", tournamentId);
-    console.log("Match Number:", matchNumber);
-    console.log("Winner ID received:", winnerId);
-    console.log("Scores:", { participant1Score, participant2Score });
 
     if (!winnerId) {
       return res.status(400).json({
@@ -1621,18 +1588,8 @@ exports.reportMatchResult = async (req, res) => {
     const participant1Id = match.participant1?.team?.toString();
     const participant2Id = match.participant2?.team?.toString();
 
-    console.log("Match participant1 team:", match.participant1?.team);
-    console.log("Match participant2 team:", match.participant2?.team);
-    console.log("Participant1 ID (string):", participant1Id);
-    console.log("Participant2 ID (string):", participant2Id);
-    console.log("Winner ID comparison:", {
-      winnerId,
-      matchesP1: winnerId === participant1Id,
-      matchesP2: winnerId === participant2Id,
-    });
 
     if (winnerId !== participant1Id && winnerId !== participant2Id) {
-      console.log("ERROR: Winner ID does not match any participant!");
       return res.status(400).json({
         success: false,
         message: `Winner must be one of the match participants. Received: ${winnerId}, Expected: ${participant1Id} or ${participant2Id}`,
@@ -1667,7 +1624,6 @@ exports.reportMatchResult = async (req, res) => {
         (m) => m.matchNumber === match.nextMatchWinner
       );
 
-      console.log("Auto-advance: nextMatchWinner =", match.nextMatchWinner, "nextMatchIndex =", nextMatchIndex);
 
       if (nextMatchIndex !== -1) {
         const nextMatch = tournament.matches[nextMatchIndex];
@@ -1681,12 +1637,9 @@ exports.reportMatchResult = async (req, res) => {
         // Determine which slot to fill (participant1 or participant2)
         if (!nextMatch.participant1 || !nextMatch.participant1.team) {
           tournament.matches[nextMatchIndex].participant1 = advanceData;
-          console.log(`Advanced ${winnerParticipant.teamName} to Match #${match.nextMatchWinner} as participant1`);
         } else if (!nextMatch.participant2 || !nextMatch.participant2.team) {
           tournament.matches[nextMatchIndex].participant2 = advanceData;
-          console.log(`Advanced ${winnerParticipant.teamName} to Match #${match.nextMatchWinner} as participant2`);
         } else {
-          console.log("WARNING: Next match already has both participants filled!");
         }
       }
     }
@@ -1748,13 +1701,10 @@ exports.reportMatchResult = async (req, res) => {
       }
 
       tournament.markModified('participants');
-      console.log(`Tournament completed! Winner: ${winnerParticipant.teamName}, Runner-up: ${loserParticipant.teamName}`);
     }
 
-    console.log("Saving tournament with updated match...");
     tournament.markModified('matches');
     await tournament.save();
-    console.log("Tournament saved successfully!");
 
     // Update team stats after tournament completion
     if (tournamentCompleted) {
@@ -1777,7 +1727,6 @@ exports.reportMatchResult = async (req, res) => {
           });
         }
 
-        console.log("Team stats updated successfully");
       } catch (statsError) {
         console.error("Error updating team stats (non-fatal):", statsError);
       }
@@ -1813,22 +1762,11 @@ exports.reportMatchResult = async (req, res) => {
 
     // Log the updated match state
     const savedMatch = tournament.matches.find(m => m.matchNumber === parseInt(matchNumber));
-    console.log("Saved match state:", {
-      matchNumber: savedMatch.matchNumber,
-      status: savedMatch.status,
-      winner: savedMatch.winner?.teamName,
-      nextMatchWinner: savedMatch.nextMatchWinner,
-    });
 
     // Log next match state to verify auto-advancement persisted
     if (match.nextMatchWinner) {
       const nextMatchSaved = tournament.matches.find(m => m.matchNumber === match.nextMatchWinner);
       if (nextMatchSaved) {
-        console.log("Next match state after save:", {
-          matchNumber: nextMatchSaved.matchNumber,
-          p1: nextMatchSaved.participant1?.teamName || 'TBD',
-          p2: nextMatchSaved.participant2?.teamName || 'TBD',
-        });
       }
     }
 
@@ -2231,7 +2169,7 @@ exports.getMatchPlayers = async (req, res) => {
           status: match.status,
           participant1: {
             teamId: team1?._id,
-            teamName: match.participant1?.teamName,
+            teamName: match.participant2?.teamName,
             won: match.winner?.team && String(match.winner.team) === String(team1?._id),
           },
           participant2: {
