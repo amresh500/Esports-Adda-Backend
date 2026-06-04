@@ -1,6 +1,7 @@
 const Organization = require("../models/Organization");
 const Team = require("../models/Team");
 const User = require("../models/User");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 // Create organization
 exports.createOrganization = async (req, res) => {
@@ -389,9 +390,10 @@ exports.getAllOrganizations = async (req, res) => {
     let filter = { isActive: true };
 
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { tag: { $regex: search, $options: "i" } },
+        { name: { $regex: safe, $options: "i" } },
+        { tag: { $regex: safe, $options: "i" } },
       ];
     }
 

@@ -357,9 +357,7 @@ exports.verifyEmail = async (req, res) => {
       .status(200)
       .json({ message: "Email verified successfully. You can now log in." });
   } catch (error) {
-    console.log(error);
-    res
-      .status(500)
-      .json({ message: "Verification failed", error: error.message });
+    console.error("verifyEmail error:", error);
+    res.status(500).json({ message: "Verification failed" });
   }
 };
