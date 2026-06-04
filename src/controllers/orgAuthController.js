@@ -3,6 +3,7 @@ const Team = require("../models/Team");
 const jwt = require("jsonwebtoken");
 const { sendVerificationEmail } = require("../utils/mailer");
 const { validatePassword } = require("../utils/passwordPolicy");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 // Generate JWT Token for organization
 const generateToken = (orgId) => {
@@ -596,9 +597,10 @@ exports.getAllOrganizationAccounts = async (req, res) => {
     let filter = { isActive: { $ne: false } };
 
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { organizationName: { $regex: search, $options: "i" } },
-        { tag: { $regex: search, $options: "i" } },
+        { organizationName: { $regex: safe, $options: "i" } },
+        { tag: { $regex: safe, $options: "i" } },
       ];
     }
 

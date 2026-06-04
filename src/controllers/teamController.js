@@ -2,6 +2,7 @@ const Team = require("../models/Team");
 const User = require("../models/User");
 const PlayerProfile = require("../models/PlayerProfile");
 const OrganizationAccount = require("../models/OrganizationAccount");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 // Create team
 exports.createTeam = async (req, res) => {
@@ -160,7 +161,7 @@ exports.getMyTeams = async (req, res) => {
 exports.getTeamById = async (req, res) => {
   try {
     const team = await Team.findById(req.params.id)
-      .populate("owner", "username email")
+      .populate("owner", "username")
       .populate("organization", "name tag logo");
 
     if (!team) {
@@ -629,9 +630,10 @@ exports.getAllTeams = async (req, res) => {
     }
 
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { tag: { $regex: search, $options: "i" } },
+        { name: { $regex: safe, $options: "i" } },
+        { tag: { $regex: safe, $options: "i" } },
       ];
     }
 

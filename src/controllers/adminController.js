@@ -7,6 +7,7 @@ const Message = require("../models/Message");
 const AuditLog = require("../models/AuditLog");
 const Notification = require("../models/Notification");
 const { emitNotification } = require("../socket/socketHandler");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 // Helper: create + emit a notification (fire-and-forget)
 async function sendNotification({ recipientId, recipientModel, type, title, message, link = null, refId = null, refModel = null }) {
@@ -27,7 +28,7 @@ async function sendNotification({ recipientId, recipientModel, type, title, mess
   }
 }
 
-// ── Dashboard Stats ─────────────────────────────────────────────────────────
+// ── Dashboard Stats ─────────────────────────────────────────────────────────────────
 
 exports.getAdminStats = async (req, res) => {
   try {
@@ -74,7 +75,7 @@ exports.getAdminStats = async (req, res) => {
   }
 };
 
-// ── Message Moderation ──────────────────────────────────────────────────────
+// ── Message Moderation ─────────────────────────────────────────────────────────────
 
 exports.getFlaggedMessages = async (req, res) => {
   try {
@@ -234,7 +235,7 @@ exports.warnMessageSender = async (req, res) => {
   }
 };
 
-// ── User Management ─────────────────────────────────────────────────────────
+// ── User Management ──────────────────────────────────────────────────────────────────
 
 exports.listUsers = async (req, res) => {
   try {
@@ -242,9 +243,10 @@ exports.listUsers = async (req, res) => {
 
     const filter = {};
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { username: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
+        { username: { $regex: safe, $options: "i" } },
+        { email: { $regex: safe, $options: "i" } },
       ];
     }
     if (isBanned === "true") filter.isBanned = true;
@@ -451,7 +453,7 @@ exports.unsuspendUser = async (req, res) => {
   }
 };
 
-// ── Stream Approval ─────────────────────────────────────────────────────────
+// ── Stream Approval ─────────────────────────────────────────────────────────────────
 
 exports.getPendingStreams = async (req, res) => {
   try {
@@ -545,7 +547,7 @@ exports.rejectStream = async (req, res) => {
   }
 };
 
-// ── Tournament Oversight ────────────────────────────────────────────────────
+// ── Tournament Oversight ───────────────────────────────────────────────────────────────
 
 exports.listAllTournaments = async (req, res) => {
   try {
@@ -627,7 +629,7 @@ exports.forceCompleteTournament = async (req, res) => {
   }
 };
 
-// ── Organization Overview ───────────────────────────────────────────────────
+// ── Organization Overview ────────────────────────────────────────────────────────────
 
 exports.listOrganizations = async (req, res) => {
   try {
@@ -635,9 +637,10 @@ exports.listOrganizations = async (req, res) => {
 
     const filter = { isActive: true };
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { organizationName: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
+        { organizationName: { $regex: safe, $options: "i" } },
+        { email: { $regex: safe, $options: "i" } },
       ];
     }
 
@@ -678,7 +681,7 @@ exports.getOrganizationDetails = async (req, res) => {
   }
 };
 
-// ── Audit Logs ──────────────────────────────────────────────────────────────
+// ── Audit Logs ───────────────────────────────────────────────────────────────────────────
 
 exports.getAuditLogs = async (req, res) => {
   try {
