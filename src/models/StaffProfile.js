@@ -233,8 +233,8 @@ const staffProfileSchema = new mongoose.Schema(
   }
 );
 
-// Index for faster lookups
-staffProfileSchema.index({ user: 1 });
+// Index for faster lookups. `user` is already indexed via `unique: true` on
+// the path, so don't re-declare it here (Mongoose warns about duplicates).
 staffProfileSchema.index({ currentOrganization: 1 });
 staffProfileSchema.index({ "games.game": 1 });
 

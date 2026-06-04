@@ -2,6 +2,7 @@ const Stream = require("../models/Stream");
 const User = require("../models/User");
 const OrganizationAccount = require("../models/OrganizationAccount");
 const Tournament = require("../models/Tournament");
+const { escapeRegex } = require("../utils/escapeRegex");
 
 // Create a new stream (Organizers only)
 exports.createStream = async (req, res) => {
@@ -94,15 +95,11 @@ exports.createStream = async (req, res) => {
 // Get all streams (public)
 exports.getAllStreams = async (req, res) => {
   try {
-    const { game, status, search, isApproved } = req.query;
+    const { game, status, search } = req.query;
 
-    // Build filter
-    let filter = {};
-
-    // Only show approved streams for public
-    if (isApproved !== "false") {
-      filter.isApproved = true;
-    }
+    // Public endpoint — only approved streams are ever returned. (Admins use
+    // the dedicated /api/admin/streams/pending endpoint for moderation queue.)
+    const filter = { isApproved: true };
 
     if (game && game !== "all") {
       filter.game = game;
@@ -113,16 +110,17 @@ exports.getAllStreams = async (req, res) => {
     }
 
     if (search) {
+      const safe = escapeRegex(search);
       filter.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { tournamentName: { $regex: search, $options: "i" } },
-        { organizerName: { $regex: search, $options: "i" } },
+        { title: { $regex: safe, $options: "i" } },
+        { tournamentName: { $regex: safe, $options: "i" } },
+        { organizerName: { $regex: safe, $options: "i" } },
       ];
     }
 
     const streams = await Stream.find(filter)
       .populate("tournament", "name game status")
-      .populate("organizer", "username email organizationName")
+      .populate("organizer", "username organizationName")
       .sort({ startTime: -1 })
       .limit(50);
 
@@ -147,7 +145,7 @@ exports.getStreamById = async (req, res) => {
   try {
     const stream = await Stream.findById(req.params.id)
       .populate("tournament", "name game status")
-      .populate("organizer", "username email organizationName");
+      .populate("organizer", "username organizationName");
 
     if (!stream) {
       return res.status(404).json({
@@ -335,20 +333,22 @@ exports.approveStream = async (req, res) => {
   }
 };
 
-// Update viewer count (can be called periodically)
+// Update viewer count — restricted to the stream's organizer. Without this
+// check any logged-in user could spoof any stream's viewer count. Value is
+// also clamped to a sane non-negative integer.
+const MAX_VIEWERS = 10_000_000;
+
 exports.updateViewerCount = async (req, res) => {
   try {
-    const { viewers } = req.body;
-
-    if (viewers === undefined) {
+    const viewers = Number(req.body?.viewers);
+    if (!Number.isFinite(viewers) || viewers < 0 || viewers > MAX_VIEWERS) {
       return res.status(400).json({
         success: false,
-        message: "Viewer count is required",
+        message: "Viewer count must be a non-negative integer",
       });
     }
 
-    const stream = await Stream.findById(req.params.id);
-
+    const stream = await Stream.findById(req.params.id).select("organizer viewers");
     if (!stream) {
       return res.status(404).json({
         success: false,
@@ -356,7 +356,14 @@ exports.updateViewerCount = async (req, res) => {
       });
     }
 
-    stream.viewers = viewers;
+    if (stream.organizer.toString() !== req.userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the stream's organizer can update the viewer count",
+      });
+    }
+
+    stream.viewers = Math.floor(viewers);
     await stream.save();
 
     res.status(200).json({

@@ -36,6 +36,7 @@ const userSchema = new mongoose.Schema({
   },
   verificationToken: {
     type: String,
+    index: { sparse: true },
   },
   verificationTokenExpiration: {
     type: Date,
@@ -43,6 +44,7 @@ const userSchema = new mongoose.Schema({
   // ── Password reset (OTP) ────────────────────────────────────────────
   resetPasswordOTP: {
     type: String,
+    index: { sparse: true },
   },
   resetPasswordExpiration: {
     type: Date,
@@ -55,6 +57,7 @@ const userSchema = new mongoose.Schema({
   },
   pendingEmailToken: {
     type: String,
+    index: { sparse: true },
   },
   pendingEmailExpiration: {
     type: Date,
@@ -106,7 +109,7 @@ userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
   try {
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
     next();
   } catch (error) {
