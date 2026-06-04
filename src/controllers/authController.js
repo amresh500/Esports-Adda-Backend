@@ -192,8 +192,10 @@ exports.login = async (req, res) => {
   try {
     const { email, password, rememberMe } = req.body;
 
-    // Validation
-    if (!email || !password) {
+    // Validation — also enforce string types so non-string inputs (post
+    // operator-key sanitization, anything weird) fail cleanly with 400 instead
+    // of bubbling to a CastError 500.
+    if (typeof email !== "string" || typeof password !== "string" || !email || !password) {
       return res.status(400).json({
         success: false,
         message: "Please provide email/username and password",
