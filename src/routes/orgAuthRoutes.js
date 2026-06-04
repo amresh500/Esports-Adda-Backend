@@ -2,12 +2,13 @@ const express = require("express");
 const router = express.Router();
 const orgAuthController = require("../controllers/orgAuthController");
 const authMiddleware = require("../middleware/auth");
+const { authLimiter, probeLimiter } = require("../middleware/rateLimiters");
 
 // Public routes
-router.post("/signup", orgAuthController.signup);
-router.post("/login", orgAuthController.login);
+router.post("/signup", authLimiter, orgAuthController.signup);
+router.post("/login", authLimiter, orgAuthController.login);
 router.post("/logout", orgAuthController.logout);
-router.get("/verify/:token", orgAuthController.verifyEmail);
+router.get("/verify/:token", probeLimiter, orgAuthController.verifyEmail);
 router.get("/all", orgAuthController.getAllOrganizationAccounts);
 
 // Protected routes
